@@ -1,0 +1,148 @@
+name: Build Redmi 12C Kernel (Evernight - CIP Latest)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - lineage-23.2
+
+jobs:
+  build-kernel:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang lld llvm \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            build-essential libncurses5-dev bison flex libssl-dev bc dwarves \
+            libelf-dev libyaml-dev zip unzip python3 git
+
+      - name: Setup Git Identity
+        run: |
+          git config --global user.name "Evernight Builder"
+          git config --global user.email "builder@evernight.local"
+
+      - name: Clone Kernel Source (LineageOS 23.2)
+        run: |
+          git clone --depth=1 https://github.com/LineageOS/android_kernel_xiaomi_earth.git -b lineage-23.2 kernel
+
+      - name: Fetch and Merge Latest CIP Patch
+        run: |
+          cd kernel
+          # Menambahkan remote CIP (Common Infrastructure Package) resmi versi 4.19-st
+          git remote add cip https://git.kernel.org/pub/scm/linux/kernel/git/cip/linux-cip.git
+          git fetch cip linux-4.19.y-cip --depth=1
+          
+          # Menggabungkan patch CIP terbaru ke dalam source kernel LineageOS
+          git merge FETCH_HEAD --allow-unrelated-histories -m "Merge latest CIP 4.19 kernel patch" || true
+
+      - name: Setup Clang Toolchain (AOSP Clang Latest)
+        run: |
+          # Mengunduh Clang AOSP ter-update (Branch main / master untuk versi Clang terbaru)
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 -b main target-clang
+
+      - name: Customize Kernel Name and Localversion
+        run: |
+          cd kernel
+          # Mengatur identifier penamaan Evernight Kernel
+          echo "-Evernight-CIP" > localversion
+
+      - name: Compile Kernel
+        run: |
+          cd kernel
+          
+          # Tentukan path Clang toolchain secara dinamis
+          CLANG_DIR="$GITHUB_WORKSPACE/target-clang"
+          CLANG_BIN=$(find $CLANG_DIR -name "clang" -type f | head -n 1 | xargs dirname)
+          export PATH="$CLANG_BIN:$PATH"
+          
+          # Konfigurasi defconfig untuk Redmi 12C (earth)
+          make O=out ARCH=arm64 earth_defconfig
+          
+          # Kompilasi target Image.gz menggunakan LLVM / Clang terbaru
+          make -j$(nproc) O=out \
+            ARCH=arm64 \
+            CC=clang \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            Image.gz
+
+      - name: Package Kernel with AnyKernel3
+        run: |
+          # Clone AnyKernel3
+          git clone --depth=1 https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/osm0sis/AnyKernel3.git anykernel
+          
+          # Salin file Image.gz hasil kompilasi ke folder anykernel
+          cp kernel/out/arch/arm64/boot/Image.gz anykernel/
+          
+          if [ -f kernel/out/arch/arm64/boot/dtb.img ]; then
+            cp kernel/out/arch/arm64/boot/dtb.img anykernel/
+          fi
+          if [ -f kernel/out/arch/arm64/boot/dtbo.img ]; then
+            cp kernel/out/arch/arm64/boot/dtbo.img anykernel/
+          fi
+          
+          # Ubah konfigurasi anykernel.sh untuk Evernight Kernel
+          cd anykernel
+          cat << 'EOF' > anykernel.sh
+          ### AnyKernel3 Ramdisk Mod Script
+          ## osm0sis @ xda-developers
+
+          ### AnyKernel setup
+          # global properties
+          properties() { '
+          kernel.string=Evernight Kernel (Redmi 12C CIP Latest)
+          do.devicecheck=1
+          device.name1=earth
+          device.name2=aether
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          supported.versions=
+          supported.patchlevels=
+          '; } # end properties
+
+          ### AnyKernel install
+          ## boot files attributes
+          boot_attributes() {
+          set_perm_recursive 0 0 755 644 $RAMDISK/*;
+          set_perm_recursive 0 0 750 750 $RAMDISK/init* $RAMDISK/sbin;
+          } # end attributes
+
+          # boot shell variables
+          BLOCK=/dev/block/by-name/boot;
+          IS_SLOT_DEVICE=1;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+
+          # import functions/variables and setup patching
+          . tools/ak3-core.sh;
+
+          # boot install
+          dump_boot;
+          write_boot;
+          EOF
+          
+          # Buat archive ZIP
+          zip -r9 ../Evernight-Kernel-Redmi12C-CIP.zip *
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Evernight-Kernel-Redmi12C-CIP
+          path: Evernight-Kernel-Redmi12C-CIP.zip
