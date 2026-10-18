@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [ksu-next+susfs] # Ubah atau tambahkan varian lain di sini jika ingin build banyak sekaligus
+        variant: [ksu-next+susfs]
 
     steps:
       - name: Free Up Disk Space Aggressively
@@ -47,7 +47,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y wget gnupg software-properties-common lsb-release
 
-          # Tambahkan repository LLVM 17 resmi
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/llvm.asc
           sudo add-apt-repository "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-17 main"
 
@@ -61,12 +60,23 @@ jobs:
           echo "Clang: $(/usr/lib/llvm-17/bin/clang --version | head -1)"
           echo "Cross: $(aarch64-linux-gnu-gcc --version | head -1)"
 
-      - name: Clone Target Kernel Source & Submodules
+      - name: Clone Target Kernel Source
         run: |
-          git clone --recursive -b lineage-23.2 https://github.com/mubashardev/android_kernel_xiaomi_earth_lineageos.git kernel
-          cd kernel
-          # Memastikan submodule ter-update dengan aman
-          git submodule update --init --recursive --remote || git submodule update --init --recursive --force
+          # Clone tanpa --recursive dulu agar kita bisa kontrol submodules secara manual
+          git clone -b lineage-23.2 https://github.com/mubashardev/android_kernel_xiaomi_earth_lineageos.git kernel
+
+      - name: Fix and Update Submodules Safely
+        working-directory: ./kernel
+        run: |
+          echo "Initializing submodules..."
+          git submodule init
+
+          echo "Updating AnyKernel3 and other submodules to latest remote HEAD..."
+          # Menggunakan --remote dan --force untuk menghindari error ref yang hilang
+          git submodule update --init --recursive --remote --force || {
+            echo "Fallback: resetting submodules..."
+            git submodule foreach --recursive 'git fetch origin && git reset --hard origin/HEAD || true'
+          }
 
       - name: Compute version string
         id: version
