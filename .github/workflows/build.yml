@@ -1,139 +1,50 @@
-name: Build Redmi 12C Kernel (Baka-SU + SUSFS)
+name: Build Xiaomi Earth Kernel (KSU-Next + SUSFS)
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - lineage-23.2
 
 jobs:
-  build-kernel:
+  build:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - name: Maximize Build Disk Space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 16384
+          swap-size-mb: 4096
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
 
-      - name: Setup Build Dependencies
+      - name: Install Build Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential libncurses5-dev bison flex libssl-dev bc dwarves \
-            libelf-dev libyaml-dev zip unzip python3 git wget curl lld llvm
+            clang-17 lld-17 llvm-17 gcc-aarch64-linux-gnu \
+            bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
+            git libncurses5-dev libssl-dev lz4 python3 rsync schedtool squashfs-tools \
+            xsltproc zlib1g-dev libelf-dev libarchive-tools wget zip
 
-      - name: Setup Git Identity
+      - name: Clone Target Repository & Submodules
         run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-
-      - name: Clone Kernel Source (LineageOS 23.2)
-        run: |
-          git clone --depth=1 https://github.com/LineageOS/android_kernel_xiaomi_earth.git -b lineage-23.2 kernel
-
-      - name: Setup Latest AOSP Clang Toolchain
-        run: |
-          # Menggunakan versi Clang terbaru dari prebuilts AOSP
-          mkdir -p target-clang
-          cd target-clang
-          bash -c "$(curl -s https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main.tar.gz)" || \
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 -b main .
-
-      - name: Integrate Baka-SU and SUSFS (Inline Hook)
-        run: |
+          # Clone repository target beserta submodule-nya
+          git clone --recursive -b lineage-23.2 https://github.com/mubashardev/android_kernel_xiaomi_earth_lineageos.git kernel
           cd kernel
-          
-          # Eksekusi setup script Baka-SU ke dalam source kernel
-          # Menggunakan inline hook sesuai permintaan
-          export BAKA_SU_HOOK_TYPE="inline"
-          curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh" | bash
+          git submodule update --init --recursive
 
-      - name: Compile Kernel
+      - name: Run Build Script
+        working-directory: ./kernel
         run: |
-          cd kernel
+          # Memberikan izin eksekusi pada build.sh jika belum ada
+          chmod +x build.sh
           
-          # Deteksi dan tentukan path binary Clang secara dinamis
-          CLANG_BIN=$(find "$GITHUB_WORKSPACE/target-clang" -type d -name "bin" | head -n 1)
-          export PATH="$CLANG_BIN:$PATH"
-          
-          # Verifikasi versi compiler
-          clang --version
-          
-          # Konfigurasi defconfig untuk Redmi 12C (earth)
-          make O=out ARCH=arm64 earth_defconfig
-          
-          # Mulai kompilasi kernel dengan toolchain LLVM/Clang
-          make -j$(nproc) O=out \
-            ARCH=arm64 \
-            CC=clang \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            Image.gz
+          # Menjalankan build varian KernelSU-Next dengan SUSFS
+          ./build.sh ksu-next+susfs
 
-      - name: Package Kernel with AnyKernel3
-        run: |
-          # Clone AnyKernel3 repository resmi
-          git clone --depth=1 https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/osm0sis/AnyKernel3.git anykernel
-          
-          # Salin hasil kompilasi kernel (Image.gz)
-          cp kernel/out/arch/arm64/boot/Image.gz anykernel/
-          
-          if [ -f kernel/out/arch/arm64/boot/dtb.img ]; then
-            cp kernel/out/arch/arm64/boot/dtb.img anykernel/
-          fi
-          if [ -f kernel/out/arch/arm64/boot/dtbo.img ]; then
-            cp kernel/out/arch/arm64/boot/dtbo.img anykernel/
-          fi
-          
-          # Konfigurasi script AnyKernel3 untuk Redmi 12C (earth / aether)
-          cd anykernel
-          cat << 'EOF' > anykernel.sh
-          ### AnyKernel3 Ramdisk Mod Script
-          ## osm0sis @ xda-developers
-
-          ### AnyKernel setup
-          properties() { '
-          kernel.string=Redmi 12C Baka-SU SUSFS Kernel
-          do.devicecheck=1
-          device.name1=earth
-          device.name2=aether
-          do.modules=0
-          do.systemless=1
-          do.cleanup=1
-          do.cleanuponabort=0
-          supported.versions=
-          supported.patchlevels=
-          '; } # end properties
-
-          ### AnyKernel install
-          boot_attributes() {
-          set_perm_recursive 0 0 755 644 $RAMDISK/*;
-          set_perm_recursive 0 0 750 750 $RAMDISK/init* $RAMDISK/sbin;
-          } # end attributes
-
-          BLOCK=/dev/block/by-name/boot;
-          IS_SLOT_DEVICE=1;
-          RAMDISK_COMPRESSION=auto;
-          PATCH_VBMETA_FLAG=auto;
-
-          . tools/ak3-core.sh;
-
-          dump_boot;
-          write_boot;
-          EOF
-          
-          # Kompres direktori AnyKernel menjadi file ZIP siap flash via Recovery
-          zip -r9 ../Redmi12C-BakaSU-SUSFS-Vanilla.zip *
-
-      - name: Upload Build Artifact
+      - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Redmi12C-BakaSU-SUSFS-Vanilla
-          path: Redmi12C-BakaSU-SUSFS-Vanilla.zip
+          name: kernel-earth-ksu-next-susfs
+          path: kernel/releases/*.zip
