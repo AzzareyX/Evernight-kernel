@@ -8,18 +8,16 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Free Up Disk Space
+      - name: Free Up Disk Space Aggressively
         run: |
-          echo "Freeing up disk space..."
+          echo "=== Freeing up disk space ==="
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /opt/ghc
           sudo rm -rf "/usr/local/share/boost"
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          
-          # Hapus cache docker atau tools besar lainnya jika ada
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/hostedtoolcache
           docker system prune -a --volumes -f || true
-          
-          # Cek sisa ruang disk setelah dibersihkan
           df -h
 
       - name: Install Build Dependencies & LLVM Repository
@@ -27,7 +25,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y wget gnupg software-properties-common lsb-release
 
-          # Tambahkan repository resmi LLVM untuk Ubuntu 22.04 (jammy)
+          # Tambahkan repository resmi LLVM untuk Ubuntu 22.04
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/llvm.asc
           sudo add-apt-repository "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-17 main"
 
@@ -36,7 +34,7 @@ jobs:
             clang-17 lld-17 llvm-17 gcc-aarch64-linux-gnu \
             bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
             git libncurses5-dev libssl-dev lz4 python3 rsync schedtool squashfs-tools \
-            xsltproc zlib1g-dev libelf-dev libarchive-tools wget zip
+            xsltproc zlib1g-dev libelf-dev libarchive-tools wget zip python-is-python3
 
       - name: Clone Target Repository & Submodules
         run: |
@@ -44,10 +42,11 @@ jobs:
           cd kernel
           git submodule update --init --recursive
 
-      - name: Run Build Script
+      - name: Run Build Script (KSU-Next + SUSFS)
         working-directory: ./kernel
         run: |
           chmod +x build.sh
+          # Menjalankan varian spesifik sesuai permintaan Anda
           ./build.sh ksu-next+susfs
 
       - name: Upload Build Artifacts
