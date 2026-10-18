@@ -8,15 +8,19 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Maximize Build Disk Space
-        uses: easimon/maximize-build-space@master
-        with:
-          root-reserve-mb: 16384
-          swap-size-mb: 4096
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
+      - name: Free Up Disk Space
+        run: |
+          echo "Freeing up disk space..."
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          
+          # Hapus cache docker atau tools besar lainnya jika ada
+          docker system prune -a --volumes -f || true
+          
+          # Cek sisa ruang disk setelah dibersihkan
+          df -h
 
       - name: Install Build Dependencies & LLVM Repository
         run: |
