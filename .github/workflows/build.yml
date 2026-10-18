@@ -30,18 +30,27 @@ jobs:
           sudo add-apt-repository "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-17 main"
 
           sudo apt-get update
-          # Mengabaikan/menghapus multilib untuk mencegah konflik dependensi
           sudo apt-get install -y \
             clang-17 lld-17 llvm-17 gcc-aarch64-linux-gnu \
             bc bison build-essential ccache curl flex \
             git libncurses5-dev libssl-dev lz4 python3 rsync schedtool squashfs-tools \
             xsltproc zlib1g-dev libelf-dev libarchive-tools wget zip python-is-python3
 
-      - name: Clone Target Repository & Submodules
+      - name: Clone Target Repository & Fix Submodules
         run: |
-          git clone --recursive -b lineage-23.2 https://github.com/mubashardev/android_kernel_xiaomi_earth_lineageos.git kernel
+          # 1. Clone repo utama tanpa submodule otomatis dulu
+          git clone -b lineage-23.2 https://github.com/mubashardev/android_kernel_xiaomi_earth_lineageos.git kernel
           cd kernel
-          git submodule update --init --recursive
+
+          # 2. Inisialisasi submodule secara manual dengan sinkronisasi branch terbaru untuk menghindari error commit hilang
+          git submodule init
+          git submodule foreach --recursive 'git fetch --all || true'
+          
+          # Perbarui submodule dengan aman
+          git submodule update --init --recursive --remote || {
+            echo "Retrying submodule update with force..."
+            git submodule update --init --recursive --force
+          }
 
       - name: Run Build Script (KSU-Next + SUSFS)
         working-directory: ./kernel
