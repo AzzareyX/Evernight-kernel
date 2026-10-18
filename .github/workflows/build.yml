@@ -1,11 +1,33 @@
-name: Build Xiaomi Earth Kernel (KSU-Next + SUSFS)
+name: Build Xiaomi Earth Kernel
 
 on:
   workflow_dispatch:
+    inputs:
+      variants:
+        description: 'Pilih varian yang ingin dibuild'
+        required: true
+        default: 'ksu-next+susfs'
+        type: choice
+        options:
+          - vanilla
+          - ksu-next
+          - sukisu
+          - ksu-next+susfs
+          - sukisu-ultra+susfs
+          - all
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
+    name: Build (${{ matrix.variant }})
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [ksu-next+susfs] # Ubah atau tambahkan varian lain di sini jika ingin build banyak sekaligus
 
     steps:
       - name: Free Up Disk Space Aggressively
@@ -20,47 +42,71 @@ jobs:
           docker system prune -a --volumes -f || true
           df -h
 
-      - name: Install Build Dependencies & LLVM Repository
+      - name: Install Toolchain & Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y wget gnupg software-properties-common lsb-release
 
-          # Tambahkan repository resmi LLVM untuk Ubuntu 22.04
+          # Tambahkan repository LLVM 17 resmi
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/llvm.asc
           sudo add-apt-repository "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-17 main"
 
           sudo apt-get update
-          sudo apt-get install -y \
-            clang-17 lld-17 llvm-17 gcc-aarch64-linux-gnu \
-            bc bison build-essential ccache curl flex \
-            git libncurses5-dev libssl-dev lz4 python3 rsync schedtool squashfs-tools \
-            xsltproc zlib1g-dev libelf-dev libarchive-tools wget zip python-is-python3
+          sudo apt-get install -y --no-install-recommends \
+            clang-17 lld-17 llvm-17 \
+            gcc-aarch64-linux-gnu \
+            bc flex bison make libssl-dev libelf-dev libyaml-dev \
+            zip unzip python3 git rsync python-is-python3
 
-      - name: Clone Target Repository & Fix Submodules
+          echo "Clang: $(/usr/lib/llvm-17/bin/clang --version | head -1)"
+          echo "Cross: $(aarch64-linux-gnu-gcc --version | head -1)"
+
+      - name: Clone Target Kernel Source & Submodules
         run: |
-          # 1. Clone repo utama tanpa submodule otomatis dulu
-          git clone -b lineage-23.2 https://github.com/mubashardev/android_kernel_xiaomi_earth_lineageos.git kernel
+          git clone --recursive -b lineage-23.2 https://github.com/mubashardev/android_kernel_xiaomi_earth_lineageos.git kernel
           cd kernel
+          # Memastikan submodule ter-update dengan aman
+          git submodule update --init --recursive --remote || git submodule update --init --recursive --force
 
-          # 2. Inisialisasi submodule secara manual dengan sinkronisasi branch terbaru untuk menghindari error commit hilang
-          git submodule init
-          git submodule foreach --recursive 'git fetch --all || true'
-          
-          # Perbarui submodule dengan aman
-          git submodule update --init --recursive --remote || {
-            echo "Retrying submodule update with force..."
-            git submodule update --init --recursive --force
-          }
-
-      - name: Run Build Script (KSU-Next + SUSFS)
+      - name: Compute version string
+        id: version
         working-directory: ./kernel
         run: |
-          chmod +x build.sh
-          # Menjalankan opsi build khusus KSU-Next dengan SUSFS
-          ./build.sh ksu-next+susfs
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          DATE="$(date +%Y.%m.%d)"
+          VERSION="v${DATE}-${SHORT_SHA}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "date=$(date +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${VERSION}"
 
-      - name: Upload Build Artifacts
+      - name: Build kernel (${{ matrix.variant }})
+        working-directory: ./kernel
+        run: ./build.sh ${{ matrix.variant }}
+        env:
+          KERNEL_VERSION: ${{ steps.version.outputs.version }}
+
+      - name: Rename zip with version
+        working-directory: ./kernel
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          DATE="${{ steps.version.outputs.date }}"
+          VARIANT="${{ matrix.variant }}"
+          OLD="releases/kernel-earth-${VARIANT}-${DATE}.zip"
+          NEW="releases/kernel-earth-${VARIANT}-${VERSION}.zip"
+          if [[ -f "$OLD" ]]; then
+            mv "$OLD" "$NEW"
+            echo "Renamed: $NEW"
+          else
+            echo "::error::Expected zip not found: $OLD"
+            ls releases/ || true
+            exit 1
+          fi
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-earth-ksu-next-susfs
-          path: kernel/releases/*.zip
+          name: kernel-earth-${{ matrix.variant }}-${{ steps.version.outputs.version }}
+          path: kernel/releases/kernel-earth-${{ matrix.variant }}-*.zip
+          retention-days: 7
+          if-no-files-found: error
