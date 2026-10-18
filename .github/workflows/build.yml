@@ -18,8 +18,15 @@ jobs:
           remove-haskell: 'true'
           remove-codeql: 'true'
 
-      - name: Install Build Dependencies
+      - name: Install Build Dependencies & LLVM Repository
         run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg software-properties-common lsb-release
+
+          # Tambahkan repository resmi LLVM untuk Ubuntu 22.04 (jammy)
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/llvm.asc
+          sudo add-apt-repository "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-17 main"
+
           sudo apt-get update
           sudo apt-get install -y \
             clang-17 lld-17 llvm-17 gcc-aarch64-linux-gnu \
@@ -29,7 +36,6 @@ jobs:
 
       - name: Clone Target Repository & Submodules
         run: |
-          # Clone repository target beserta submodule-nya
           git clone --recursive -b lineage-23.2 https://github.com/mubashardev/android_kernel_xiaomi_earth_lineageos.git kernel
           cd kernel
           git submodule update --init --recursive
@@ -37,10 +43,7 @@ jobs:
       - name: Run Build Script
         working-directory: ./kernel
         run: |
-          # Memberikan izin eksekusi pada build.sh jika belum ada
           chmod +x build.sh
-          
-          # Menjalankan build varian KernelSU-Next dengan SUSFS
           ./build.sh ksu-next+susfs
 
       - name: Upload Build Artifacts
