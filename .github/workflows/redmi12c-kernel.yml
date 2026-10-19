@@ -1,90 +1,144 @@
-name: Build Redmi 12C Kernel 4.19 (ReSukiSU + SusFS + Inline Hook)
+name: Build Xiaomi Redmi 12C (Lineage 23.2 - Kernel 4.19)
 
 on:
   workflow_dispatch:
 
+env:
+  # Device env
+  DEVICE_NAME : "redmi_12c"
+  DEVICE_CODENAME : "earth"
+
+  CUSTOM_CMDS : "CLANG_TRIPLE=aarch64-linux-gnu-"
+  EXTRA_CMDS : "LD=ld.lld LLVM=1 LLVM_IAS=1"
+
+  KERNEL_SOURCE : "https://github.com/mt6768-dev/android_kernel_xiaomi_earth.git"
+  KERNEL_BRANCH : "lineage-23.2"
+
+  CLANG_SOURCE : "https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/LLVM-19.1.7-Linux-X64.tar.xz"
+  CLANG_BRANCH : ""
+
+  GCC_GNU : false
+  GCC_64_SOURCE : "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9.git"
+  GCC_64_BRANCH : "android12L-release"
+  GCC_32_SOURCE : "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/x86/x86_64-linux-android-4.9.git"
+  GCC_32_BRANCH : "android12L-release"
+
+  DEFCONFIG_SOURCE: ""
+  DEFCONFIG_NAME : "mtk_earth_defconfig"
+  DEFCONFIG_ORIGIN_IMAGE: ""
+  DEFCONFIG_FROM_BOOT: false
+
+  KERNELSU_SOURCE : ""
+  KERNELSU_BRANCH : ""
+
+  KERNELSU_AUTO_GET : "true"
+  KERNELSU_AUTO_FORK : "bakasu" # ReSukiSU / Bakasu
+
+  SUSFS_ENABLE : true
+  SUSFS_FIXED : true
+
+  AK3_SOURCE : "https://github.com/osm0sis/AnyKernel3.git"
+  AK3_BRANCH : "master"
+
+  BOOT_SOURCE : ""
+
+  NEED_DTBO : true
+  NEED_SAFE_DTBO : false
+
+  ROM_TEXT : "lineage_23.2"
+
+  # Other env
+  PYTHON_VERSION: "3"
+
+  PACK_METHOD: "AnyKernel3"
+  PACK_KMODULES: "false"
+
+  KERNELSU_METHOD: "shell"
+
+  PATCHES_SOURCE: "JackA1ltman/NonGKI_Kernel_Patches"
+  PATCHES_BRANCH: "main"
+
+  SUSFS_FOLDER_FIXED: "4.19"
+  SUSFS_PATCH_FIXED: ""
+
+  REKERNEL_ENABLE: "false"
+  DROIDSPACES_ENABLE: "false"
+  NOMOUNT_ENABLE: "false"
+
+  HOOK_METHOD: "syscall"
+
+  KPM_ENABLE: "false"
+  KPM_INLINE: "false"
+  KPM_KPATCH_NEXT: "false"
+  KPM_PATCH_SOURCE: "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/refs/heads/main/kpm/patch_linux"
+
+  BASEBAND_GUARD_ENABLE: "false"
+  BASEBAND_GUARD_BOOT: "false"
+
+  GENERATE_DTB: "false"
+  GENERATE_CHIP: "mediatek"
+
+  BUILD_DEBUGGER: "false"
+  SKIP_PATCH: "true"
+
+  BUILD_OTHER_CONFIG: "false"
+  MERGE_CONFIG_FILES: ""
+
+  FREE_MORE_SPACE: "false"
+
 jobs:
-  build:
-    runs-on: ubuntu-22.04
+  build-kernel:
+    name: Build Redmi 12C Kernel (Earth)
+    runs-on: ubuntu-24.04
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
 
     steps:
-      - name: Install Build Dependencies
-        run: |
-          sudo apt-get update && sudo apt-get install -y \
-            git ccache automake lzop bison gperf build-essential \
-            zip curl zlib1g-dev g++-multilib libxml2-utils lib32z1-dev \
-            liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 \
-            xsltproc unzip bc rsync imagemagick libtool libelf-dev xz-utils \
-            schedtool squashfs-tools pngquant ncftp make pkg-config lib32ncurses5-dev
-
-      - name: Clone Kernel Source
-        run: |
-          git clone --depth=1 https://github.com/mt6768-dev/android_kernel_xiaomi_earth -b lineage-23.2 kernel
-          cd kernel
-
-      - name: Integrate ReSukiSU
-        run: |
-          cd kernel
-          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
-
-      - name: Fetch and Apply SusFS & Inline Hook Patches (Kernel 4.19)
-        run: |
-          cd kernel
-
-          # Kloning repositori patch milik JackA1ltman
-          git clone --depth=1 https://github.com/JackA1ltman/NonGKI_Kernel_Build_2nd.git -b mainline patches_repo
-
-          # 1. Jalankan skrip inline hook
-          if [ -f "patches_repo/Patches/Patch/inline_hook.sh" ]; then
-            cp patches_repo/Patches/Patch/inline_hook.sh ./inline_hook.sh
-            chmod +x inline_hook.sh
-            ./inline_hook.sh
-          fi
-
-          # 2. Terapkan SusFS patch khusus untuk Kernel 4.19
-          PATCH_419_DIR="patches_repo/Patches/4.19"
-          if [ -d "$PATCH_419_DIR" ]; then
-            for patch_file in "$PATCH_419_DIR"/*.patch; do
-              if [ -f "$patch_file" ]; then
-                echo "Applying 4.19 patch: $patch_file"
-                git apply "$patch_file" || patch -p1 < "$patch_file" || true
-              fi
-            done
-          else
-            echo "Direktori patch 4.19 tidak ditemukan, mencoba patch umum..."
-            for patch_file in patches_repo/Patches/*.patch; do
-              if [ -f "$patch_file" ]; then
-                echo "Applying patch: $patch_file"
-                git apply "$patch_file" || patch -p1 < "$patch_file" || true
-              fi
-            done
-          fi
-
-          # Bersihkan file sementara
-          rm -rf patches_repo inline_hook.sh
-
-      - name: Setup Toolchain & Build Kernel
-        run: |
-          cd kernel
-          
-          # Clone Toolchain AArch64 GCC 4.9 (Standar untuk Kernel 4.19 MediaTek)
-          git clone --depth=1 https://github.com/chenxiaolong/Toolchain-AArch64-GNU aarch64-linux-android-4.9
-          
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export CROSS_COMPILE=$PWD/aarch64-linux-android-4.9/bin/aarch64-linux-gnu-
-          export PATH="$PWD/aarch64-linux-android-4.9/bin:$PATH"
-          
-          # Generate defconfig untuk Redmi 12C (earth)
-          make mtk_earth_defconfig
-          
-          # Kompilasi kernel
-          make -j$(nproc) Image.gz-dtb dtbo.img
-
-      - name: Upload Kernel Artifacts
-        uses: actions/upload-artifact@v4
+      - name: ⏰ Clone Build Runner Repository
+        uses: actions/checkout@v4
         with:
-          name: Redmi-12C-Kernel-4.19-ReSukiSU-SusFS
-          path: |
-            kernel/arch/arm64/boot/Image.gz-dtb
-            kernel/arch/arm64/boot/dtbo.img
+          repository: JackA1ltman/NonGKI_Kernel_Build_2nd
+          ref: mainline
+
+      - name: ⌛️ Compilation environment preparation
+        uses: ./.github/workflows/build-env
+
+      - name: ⚙️ Get necessary tools
+        uses: ./.github/workflows/build-ready
+
+      - name: 🪝 Patch Kernel of SUSFS
+        uses: ./.github/workflows/patch-susfs
+
+      - name: 🔗 Patch for no-kprobe
+        uses: ./.github/workflows/patch-no-kprobe
+
+      - name: 🪛 Extra Kernel Options
+        run: |
+          cd $GITHUB_WORKSPACE/device_kernel
+          echo "CONFIG_KSU_SUSFS=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+
+      - name: 🧰 Patch Kernel of Re:Kernel
+        uses: ./.github/workflows/patch-rekernel
+
+      - name: 💿 Patch Kernel of Droidspaces
+        uses: ./.github/workflows/patch-droidspaces
+
+      - name: 🔒 Patch Kernel of Baseband Guard
+        uses: ./.github/workflows/patch-baseband-guard
+
+      - name: 🛡️ Patch Kernel of NoMount
+        uses: ./.github/workflows/patch-nomount
+
+      - name: 🚀 Build Process
+        uses: ./.github/workflows/build-process
+
+      - name: 🔩 Pack Process
+        uses: ./.github/workflows/pack-process
+
+      - name: ✏️ Upload Artifacts
+        uses: ./.github/workflows/upload-files
