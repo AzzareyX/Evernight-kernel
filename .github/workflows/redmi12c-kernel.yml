@@ -1,257 +1,80 @@
-name: Redmi 12C - CIP Ancestry Audit (Deepen History)
+name: Build Redmi 12C Kernel (ReSukiSU + SusFS + Inline Hook)
 
 on:
   workflow_dispatch:
-    inputs:
-      kernel_branch:
-        description: 'Kernel source branch'
-        required: true
-        default: 'lineage-23.2'
-        type: string
-      cip_base_ref:
-        description: 'CIP baseline tag'
-        required: true
-        default: 'v4.19.325-cip134'
-        type: string
-      cip_target_ref:
-        description: 'CIP target tag'
-        required: true
-        default: 'v4.19.325-cip136'
-        type: string
-      source_since:
-        description: 'Earliest source commit date (YYYY-MM-DD)'
-        required: true
-        default: '2026-04-01'
-        type: string
-      max_deepen_rounds:
-        description: 'Maximum history deepening rounds'
-        required: true
-        default: '6'
-        type: string
-
-permissions:
-  contents: read
-
-concurrency:
-  group: cip-deepen-audit-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
-  audit:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
+  build:
+    runs-on: ubuntu-22.04
+
     steps:
-      - name: Install tools and create reports
-        shell: bash
+      - name: Install Dependencies
         run: |
-          set -Eeuo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends git python3 ca-certificates
-          mkdir -p reports
-          {
-            echo '# Redmi 12C CIP ancestry audit — deepen history'
-            echo
-            echo '- Read-only audit only: no patches applied, no root setup, no kernel build.'
-            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-            echo
-          } > reports/audit.md
-          git --version > reports/tool-versions.txt
-          python3 --version >> reports/tool-versions.txt
+          sudo apt-get update && sudo apt-get install -y \
+            git ccache automake lzop bison gperf build-essential \
+            zip curl zlib1g-dev g++-multilib libxml2-utils lib32z1-dev \
+            liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 \
+            xsltproc unzip bc rsync imagemagick libtool libelf-dev xz-utils \
+            schedtool squashfs-tools pngquant ncftp make pkg-config lib32ncurses5-dev
 
-      - name: Clone shallow source with relaxed timeout and retries
-        env:
-          KERNEL_BRANCH: ${{ inputs.kernel_branch }}
-        shell: bash
+      - name: Clone Kernel Source
         run: |
-          set -Eeuo pipefail
-          git config --global http.version HTTP/1.1
-          git config --global http.lowSpeedLimit 0
-          git config --global http.lowSpeedTime 0
-          URL="https://github.com/mt6768-dev/android_kernel_xiaomi_earth.git"
-          for attempt in 1 2 3; do
-            if git clone --filter=blob:none --no-checkout --single-branch \
-              --branch "$KERNEL_BRANCH" --depth=100 --no-tags "$URL" kernel; then
-              break
-            fi
-            rc=$?
-            rm -rf kernel
-            echo "Clone attempt $attempt failed (exit $rc)." | tee -a reports/audit.md
-            if [ "$attempt" -eq 3 ]; then
-              echo 'Clone failed after three attempts; audit incomplete.' | tee -a reports/audit.md
-              exit "$rc"
-            fi
-            sleep $((attempt * 10))
-          done
-          {
-            echo "- Source branch: \`${KERNEL_BRANCH}\`"
-            echo "- Initial HEAD: \`$(git -C kernel rev-parse HEAD)\`"
-            echo "- Initial commit count: $(git -C kernel rev-list --count HEAD)"
-          } | tee -a reports/audit.md
+          git clone --depth=1 https://github.com/mt6768-dev/android_kernel_xiaomi_earth -b lineage-23.2 kernel
+          cd kernel
 
-      - name: Deepen source history until date coverage or limit
-        env:
-          SOURCE_SINCE: ${{ inputs.source_since }}
-          MAX_ROUNDS: ${{ inputs.max_deepen_rounds }}
-          KERNEL_BRANCH: ${{ inputs.kernel_branch }}
-        shell: bash
+      - name: Integrate ReSukiSU
         run: |
-          set -Eeuo pipefail
-          [[ "$MAX_ROUNDS" =~ ^[0-9]+$ ]] && (( MAX_ROUNDS >= 1 && MAX_ROUNDS <= 10 )) || {
-            echo 'max_deepen_rounds must be between 1 and 10.' | tee -a reports/audit.md
-            exit 2
-          }
-          : > reports/deepen-log.txt
-          for round in $(seq 1 "$MAX_ROUNDS"); do
-            count="$(git -C kernel log --since="$SOURCE_SINCE" --format=%H HEAD | wc -l | tr -d ' ')"
-            total="$(git -C kernel rev-list --count HEAD)"
-            shallow="$(test -f kernel/.git/shallow && echo yes || echo no)"
-            echo "round=$round total_commits=$total commits_since_date=$count shallow=$shallow" | tee -a reports/deepen-log.txt
-            # Need at least 100 commits in the requested date window before calling
-            # a patch-ID comparison useful; continue if history is still shallow.
-            if [ "$shallow" = no ]; then
-              echo "History is complete (not shallow)." | tee -a reports/audit.md
-              break
-            fi
-            if [ "$count" -ge 100 ]; then
-              echo "At least 100 commits found since requested date; continue deepening to reduce false negatives." | tee -a reports/audit.md
-            fi
-            deepen_by=$((1000 * round))
-            echo "Fetching --deepen=$deepen_by" | tee -a reports/deepen-log.txt
-            ok=0
-            for attempt in 1 2 3; do
-              if git -C kernel fetch --deepen="$deepen_by" --filter=blob:none --no-tags origin "$KERNEL_BRANCH"; then
-                ok=1
-                break
-              fi
-              echo "Deepen round $round attempt $attempt failed." | tee -a reports/deepen-log.txt
-              sleep $((attempt * 8))
-            done
-            if [ "$ok" -ne 1 ]; then
-              echo "Deepening failed in round $round; history coverage is incomplete." | tee -a reports/audit.md
-              break
-            fi
-          done
-          git -C kernel rev-list --count HEAD | tee reports/source-total-commits.txt
-          git -C kernel log --since="$SOURCE_SINCE" --format=%H HEAD | wc -l | tr -d ' ' | tee reports/source-commits-since-date.txt
-          if test -f kernel/.git/shallow; then
-            echo 'history_complete=false' | tee reports/history-status.txt
-            echo 'WARNING: source history is still shallow; any zero-match result is INCOMPLETE.' | tee -a reports/audit.md
-          else
-            echo 'history_complete=true' | tee reports/history-status.txt
+          cd kernel
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+
+      - name: Fetch and Apply SusFS & Inline Hook Patches
+        run: |
+          cd kernel
+
+          # Kloning repositori patch milik JackA1ltman
+          git clone --depth=1 https://github.com/JackA1ltman/NonGKI_Kernel_Build_2nd.git -b mainline patches_repo
+
+          # 1. Jalankan skrip inline hook dari repositori
+          if [ -f "patches_repo/Patches/Patch/inline_hook.sh" ]; then
+            cp patches_repo/Patches/Patch/inline_hook.sh ./inline_hook.sh
+            chmod +x inline_hook.sh
+            ./inline_hook.sh
           fi
 
-      - name: Fetch official CIP tags
-        id: cip
-        env:
-          CIP_BASE_REF: ${{ inputs.cip_base_ref }}
-          CIP_TARGET_REF: ${{ inputs.cip_target_ref }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git -C kernel remote add cip https://kernel.googlesource.com/pub/scm/linux/kernel/git/cip/linux-cip
-          ok=0
-          for attempt in 1 2 3; do
-            if git -C kernel fetch --filter=blob:none --no-tags cip \
-              "refs/tags/${CIP_BASE_REF}:refs/tags/${CIP_BASE_REF}" \
-              "refs/tags/${CIP_TARGET_REF}:refs/tags/${CIP_TARGET_REF}"; then
-              ok=1
-              break
+          # 2. Terapkan SusFS patch
+          # Mengambil patch kernel versi 4.19 / 5.4 yang sesuai dari direktori Patches
+          for patch_file in patches_repo/Patches/*.patch patches_repo/Patches/Patch/*.patch; do
+            if [ -f "$patch_file" ]; then
+              echo "Applying patch: $patch_file"
+              git apply "$patch_file" || patch -p1 < "$patch_file" || true
             fi
-            echo "CIP fetch attempt $attempt failed." | tee -a reports/audit.md
-            sleep $((attempt * 8))
           done
-          [ "$ok" -eq 1 ] || { echo 'Could not fetch CIP refs.' | tee -a reports/audit.md; exit 1; }
-          BASE_SHA="$(git -C kernel rev-parse "refs/tags/${CIP_BASE_REF}^{commit}")"
-          TARGET_SHA="$(git -C kernel rev-parse "refs/tags/${CIP_TARGET_REF}^{commit}")"
-          echo "$BASE_SHA" > reports/cip-base-sha.txt
-          echo "$TARGET_SHA" > reports/cip-target-sha.txt
-          git -C kernel rev-list --count "$BASE_SHA..$TARGET_SHA" | tee reports/cip-delta-count.txt
-          git -C kernel rev-list --reverse "$BASE_SHA..$TARGET_SHA" > reports/cip-delta-commits.txt
-          echo "cip_refs_ok=true" >> "$GITHUB_OUTPUT"
 
-      - name: Compare ancestry and selected patch IDs
-        if: steps.cip.outputs.cip_refs_ok == 'true'
-        env:
-          CIP_BASE_REF: ${{ inputs.cip_base_ref }}
-          CIP_TARGET_REF: ${{ inputs.cip_target_ref }}
-          SOURCE_SINCE: ${{ inputs.source_since }}
-        shell: bash
+          # Bersihkan folder repositori patch temp
+          rm -rf patches_repo inline_hook.sh
+
+      - name: Setup Toolchain & Build Kernel
         run: |
-          set -Eeuo pipefail
-          python3 - <<'PY'
-          import json, os, pathlib, subprocess
-          from collections import defaultdict
-          root = pathlib.Path('kernel')
-          outdir = pathlib.Path('reports')
-          since = os.environ['SOURCE_SINCE']
-          until = '2026-10-20'
-          base_ref, target_ref = os.environ['CIP_BASE_REF'], os.environ['CIP_TARGET_REF']
-          def git(*args, check=True):
-              p = subprocess.run(['git','-C',str(root),*args],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-              if check and p.returncode:
-                  raise RuntimeError(f"git {' '.join(args)}: {p.stderr[-2000:]}")
-              return p
-          head = git('rev-parse','HEAD').stdout.strip()
-          base = git('rev-parse',f'refs/tags/{base_ref}^{{commit}}').stdout.strip()
-          target = git('rev-parse',f'refs/tags/{target_ref}^{{commit}}').stdout.strip()
-          ancestor = git('merge-base','--is-ancestor',base,'HEAD',check=False).returncode == 0
-          mb = git('merge-base',base,'HEAD',check=False).stdout.strip() or None
-          cip_shas = git('rev-list','--no-merges',f'{base}..{target}').stdout.splitlines()
-          source_shas = git('log','--no-merges',f'--since={since}',f'--until={until}','--format=%H','HEAD').stdout.splitlines()
-          def patch_id(sha):
-              p = git('show','--format=','--no-ext-diff','--binary','--no-renames',sha,check=False)
-              if p.returncode or not p.stdout.strip(): return None
-              q = subprocess.run(['git','patch-id','--stable'],input=p.stdout,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-              toks = q.stdout.split()
-              return toks[0] if toks else None
-          source_ids = defaultdict(list)
-          for i, sha in enumerate(source_shas,1):
-              pid = patch_id(sha)
-              if pid: source_ids[pid].append(sha)
-              if i % 250 == 0: print(f'Source patch IDs: {i}/{len(source_shas)}',flush=True)
-          rows=[]
-          matched=0
-          for i, sha in enumerate(cip_shas,1):
-              pid=patch_id(sha)
-              subject=git('show','-s','--format=%s',sha).stdout.strip()
-              hits=source_ids.get(pid,[]) if pid else []
-              status='exact-match' if hits else ('empty-or-no-patch-id' if not pid else 'no-exact-match')
-              matched += bool(hits)
-              rows.append({'cip_sha':sha,'subject':subject,'patch_id':pid,'status':status,'source_matches':hits})
-              if i % 200 == 0: print(f'CIP patch IDs: {i}/{len(cip_shas)}',flush=True)
-          shallow=(root/'.git'/'shallow').exists()
-          scanned=len(source_shas)
-          complete=not shallow
-          data={'source_head':head,'source_shallow':shallow,'source_commits_since_date_scanned':scanned,
-                'cip_baseline':{'ref':base_ref,'sha':base},'cip_target':{'ref':target_ref,'sha':target},
-                'cip_baseline_exact_sha_is_ancestor':ancestor,'merge_base':mb,
-                'cip_nonmerge_commits_compared':len(cip_shas),'exact_patch_id_matches':matched,
-                'audit_status':'COMPLETE' if complete else 'INCOMPLETE_HISTORY_STILL_SHALLOW',
-                'warning':'No patch-ID match is not proof of absence; patch-ID matching detects exact stable diffs only.'}
-          (outdir/'audit.json').write_text(json.dumps({'summary':data,'patches':rows},indent=2)+'\n')
-          with (outdir/'patch-matches.csv').open('w') as f:
-              f.write('status,cip_sha,patch_id,subject,source_matches\n')
-              for r in rows:
-                  subj=r['subject'].replace('"','""')
-                  f.write(f'{r["status"]},{r["cip_sha"]},{r["patch_id"] or ""},"{subj}","{";".join(r["source_matches"])}"\n')
-          with (outdir/'audit.md').open('a') as f:
-              f.write('\n## Audit summary\n\n')
-              f.write(f'- Status: **{data["audit_status"]}**\n- Source HEAD: `{head}`\n')
-              f.write(f'- Source commits in requested date window scanned: {scanned}\n')
-              f.write(f'- Source history still shallow: {shallow}\n')
-              f.write(f'- Exact CIP baseline SHA is ancestor of source HEAD: {ancestor}\n')
-              f.write(f'- Merge base: `{mb or "not found"}`\n')
-              f.write(f'- CIP non-merge commits compared: {len(cip_shas)}\n')
-              f.write(f'- Exact patch-ID matches: {matched}\n')
-              f.write('\nA zero-match result is not conclusive unless source history coverage is complete; modified/backported patches may have different patch IDs.\n')
-          print(json.dumps(data,indent=2))
-          PY
+          cd kernel
+          
+          # Clone Toolchain AArch64 GCC 4.9
+          git clone --depth=1 https://github.com/chenxiaolong/Toolchain-AArch64-GNU aarch64-linux-android-4.9
+          
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CROSS_COMPILE=$PWD/aarch64-linux-android-4.9/bin/aarch64-linux-gnu-
+          export PATH="$PWD/aarch64-linux-android-4.9/bin:$PATH"
+          
+          # Generate defconfig untuk Redmi 12C (earth)
+          make mtk_earth_defconfig
+          
+          # Kompilasi kernel
+          make -j$(nproc) Image.gz-dtb dtbo.img
 
-      - name: Upload audit reports even on failure
-        if: always()
+      - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: redmi12c-cip-ancestry-patch-audit-deepen
-          path: reports/
-          if-no-files-found: warn
-          retention-days: 30
+          name: Redmi-12C-Kernel-ReSukiSU-SusFS
+          path: |
+            kernel/arch/arm64/boot/Image.gz-dtb
+            kernel/arch/arm64/boot/dtbo.img
