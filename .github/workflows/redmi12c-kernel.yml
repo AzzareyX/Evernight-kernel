@@ -1,378 +1,275 @@
-name: Redmi 12C Earth - BakaSU + CIP136 Delta + SUSFS Compatibility Gate
+name: Redmi 12C - CIP Ancestry and Patch Audit (No Build)
 
 on:
   workflow_dispatch:
     inputs:
       kernel_branch:
-        description: 'Kernel source branch'
+        description: 'Redmi 12C kernel branch to audit'
         required: true
         default: 'lineage-23.2'
         type: string
-      cip_ref:
-        description: 'Official CIP tag to integrate (review/update when a newer non-RT release is available)'
+      cip_base_ref:
+        description: 'CIP baseline tag'
+        required: true
+        default: 'v4.19.325-cip134'
+        type: string
+      cip_target_ref:
+        description: 'CIP target tag (latest verified for this audit)'
         required: true
         default: 'v4.19.325-cip136'
         type: string
-      bakasu_ref:
-        description: 'BakaSU ref passed to its setup script'
+      source_since:
+        description: 'Earliest committer date for source patch-id comparison (YYYY-MM-DD)'
         required: true
-        default: 'main'
+        default: '2026-04-01'
         type: string
-      run_inline_hook_audit:
-        description: 'Run JackA1ltman SUSFS + inline-hook patch script; incompatibility blocks build'
+      source_commit_limit:
+        description: 'Maximum recent non-merge source commits to inspect'
         required: true
-        default: true
-        type: boolean
+        default: '8000'
+        type: string
 
 permissions:
   contents: read
 
-env:
-  KERNEL_REPO: mt6768-dev/android_kernel_xiaomi_earth
-  JACK_REPO: JackA1ltman/NonGKI_Kernel_Build_2nd
-  ARCH: arm64
-  DEFCONFIG: earth_defconfig
-  TZ: Asia/Jakarta
+concurrency:
+  group: cip-audit-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
+  ancestry-and-patch-audit:
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 90
     steps:
-      - name: Install build dependencies
+      - name: Install minimal audit tools
+        shell: bash
         run: |
+          set -Eeuo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            bc bison build-essential ccache clang-18 clang-tools-18 \
-            cpio flex git libelf-dev libncurses-dev libssl-dev lld-18 \
-            llvm-18 python3 python3-pip rsync unzip zip wget curl dwarves
-          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
-          sudo ln -sf /usr/bin/ld.lld-18 /usr/local/bin/ld.lld
-          clang --version | head -n 1
-          ld.lld --version | head -n 1
+          sudo apt-get install -y --no-install-recommends git python3 ca-certificates
+          git --version
+          python3 --version
 
-      - name: Checkout kernel source
-        id: kernel
-        uses: actions/checkout@v4
-        with:
-          repository: mt6768-dev/android_kernel_xiaomi_earth
-          ref: ${{ inputs.kernel_branch }}
-          path: kernel
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Initialize audit report
+      - name: Clone kernel history without checking out files
+        id: source
         env:
           KERNEL_BRANCH: ${{ inputs.kernel_branch }}
-          REQUESTED_CIP_REF: ${{ inputs.cip_ref }}
-          REQUESTED_BAKASU_REF: ${{ inputs.bakasu_ref }}
+          SOURCE_COMMIT_LIMIT: ${{ inputs.source_commit_limit }}
+        shell: bash
         run: |
+          set -Eeuo pipefail
           mkdir -p reports
+          git clone --filter=blob:none --no-checkout --single-branch \
+            --branch "$KERNEL_BRANCH" --depth="$SOURCE_COMMIT_LIMIT" \
+            https://github.com/mt6768-dev/android_kernel_xiaomi_earth.git kernel
+          git -C kernel rev-parse HEAD | tee reports/source-head.txt
+          git -C kernel log -1 --format='source_subject=%s%nsource_commit_date=%cI%nsource_author_date=%aI' \
+            | tee reports/source-head-metadata.txt
           {
-            echo '# Redmi 12C Kernel Build Audit'
+            echo '# Redmi 12C CIP ancestry and patch audit'
             echo
-            echo "- Source: \`${KERNEL_REPO}@${KERNEL_BRANCH}\`"
-            echo "- Requested CIP ref: \`${REQUESTED_CIP_REF}\`"
-            echo "- BakaSU ref: \`${REQUESTED_BAKASU_REF}\`"
-            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo '- Mode: read-only audit; no patches applied, no root solution installed, no kernel build, no flashable ZIP.'
+            echo "- Source: mt6768-dev/android_kernel_xiaomi_earth@${KERNEL_BRANCH}"
+            echo "- Source HEAD: $(git -C kernel rev-parse HEAD)"
+            echo "- Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             echo
-          } > reports/build-audit.md
-          git -C kernel rev-parse HEAD | tee reports/source-commit.txt
+          } > reports/audit.md
 
-      - name: Integrate CIP release delta safely (CIP134 -> CIP136)
+      - name: Fetch official CIP baseline and target
         id: cip
-        continue-on-error: true
         env:
-          CIP_REF: ${{ inputs.cip_ref }}
-          CIP_BASE_REF: v4.19.325-cip134
+          CIP_BASE_REF: ${{ inputs.cip_base_ref }}
+          CIP_TARGET_REF: ${{ inputs.cip_target_ref }}
+        shell: bash
         run: |
           set -Eeuo pipefail
-          cd kernel
-          {
-            echo '## CIP release-delta integration'
-            echo
-            echo "Requested CIP target: \`${CIP_REF}\`"
-            echo "Required source baseline: \`${CIP_BASE_REF}\`"
-            echo 'Strategy: apply only the release delta, never merge the entire upstream CIP tree into the Android device tree.'
-            echo 'Remote: https://kernel.googlesource.com/pub/scm/linux/kernel/git/cip/linux-cip'
-          } | tee -a ../reports/build-audit.md
-
-          git remote add cip https://kernel.googlesource.com/pub/scm/linux/kernel/git/cip/linux-cip
-          if ! git fetch --no-tags cip \
+          git -C kernel remote add cip https://kernel.googlesource.com/pub/scm/linux/kernel/git/cip/linux-cip
+          git -C kernel fetch --filter=blob:none --no-tags cip \
             "refs/tags/${CIP_BASE_REF}:refs/tags/${CIP_BASE_REF}" \
-            "refs/tags/${CIP_REF}:refs/tags/${CIP_REF}"; then
-            echo 'FAIL: could not fetch CIP baseline/target tags. Verify tag names and availability.' | tee -a ../reports/build-audit.md
-            echo 'cip_ok=false' >> "$GITHUB_OUTPUT"
+            "refs/tags/${CIP_TARGET_REF}:refs/tags/${CIP_TARGET_REF}"
+          BASE_SHA="$(git -C kernel rev-parse "refs/tags/${CIP_BASE_REF}^{commit}")"
+          TARGET_SHA="$(git -C kernel rev-parse "refs/tags/${CIP_TARGET_REF}^{commit}")"
+          printf '%s\n' "$BASE_SHA" > reports/cip-base-sha.txt
+          printf '%s\n' "$TARGET_SHA" > reports/cip-target-sha.txt
+          {
+            echo '## CIP refs'
+            echo
+            echo "- Baseline: \\`${CIP_BASE_REF}\\` → \\`${BASE_SHA}\\`"
+            echo "- Target: \\`${CIP_TARGET_REF}\\` → \\`${TARGET_SHA}\\`"
+          } | tee -a reports/audit.md
+          if ! git -C kernel merge-base --is-ancestor "$BASE_SHA" "$TARGET_SHA"; then
+            echo 'FAIL: baseline is not an ancestor of target; cannot compute a safe release delta.' | tee -a reports/audit.md
+            echo 'cip_refs_ok=false' >> "$GITHUB_OUTPUT"
             exit 1
           fi
+          git -C kernel rev-list "$BASE_SHA..$TARGET_SHA" > reports/cip-delta-commits.txt
+          git -C kernel rev-list --count "$BASE_SHA..$TARGET_SHA" | tee reports/cip-delta-count.txt
+          echo 'cip_refs_ok=true' >> "$GITHUB_OUTPUT"
 
-          BASE_COMMIT="$(git rev-parse "refs/tags/${CIP_BASE_REF}^{commit}")"
-          TARGET_COMMIT="$(git rev-parse "refs/tags/${CIP_REF}^{commit}")"
-          echo "CIP baseline commit: \`${BASE_COMMIT}\`" | tee -a ../reports/build-audit.md
-          echo "CIP target commit: \`${TARGET_COMMIT}\`" | tee -a ../reports/build-audit.md
-
-          if ! git merge-base --is-ancestor "$BASE_COMMIT" "$TARGET_COMMIT"; then
-            echo 'FAIL: CIP baseline tag is not an ancestor of target tag; release delta cannot be computed safely.' | tee -a ../reports/build-audit.md
-            echo 'cip_ok=false' >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-
-          if ! git merge-base --is-ancestor "$BASE_COMMIT" HEAD; then
-            echo 'FAIL: device source HEAD does not contain the exact CIP134 baseline commit. Do not force-merge CIP136; first rebase/port the device tree onto the correct CIP baseline in a reviewed branch.' | tee -a ../reports/build-audit.md
-            echo 'cip_ok=false' >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-
-          mapfile -t CIP_COMMITS < <(git rev-list --reverse --first-parent "${BASE_COMMIT}..${TARGET_COMMIT}")
-          if [ "${#CIP_COMMITS[@]}" -eq 0 ]; then
-            echo 'FAIL: no first-parent commits found between CIP baseline and target; refusing to label the source as updated.' | tee -a ../reports/build-audit.md
-            echo 'cip_ok=false' >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          printf '%s\n' "${CIP_COMMITS[@]}" > ../reports/cip-commits-to-apply.txt
-          echo "Release delta contains ${#CIP_COMMITS[@]} first-parent commits." | tee -a ../reports/build-audit.md
-
-          # Apply each release delta commit in order. Merge commits are replayed relative
-          # to their first parent; any conflict aborts and blocks all downstream stages.
-          for COMMIT in "${CIP_COMMITS[@]}"; do
-            SUBJECT="$(git show -s --format=%s "$COMMIT")"
-            PARENT_COUNT="$(git rev-list --parents -n 1 "$COMMIT" | awk '{print NF-1}')"
-            echo "Applying ${COMMIT} (${SUBJECT})" | tee -a ../reports/cip-merge.log
-            set +e
-            if [ "$PARENT_COUNT" -gt 1 ]; then
-              git -c user.name='GitHub Actions' -c user.email='actions@users.noreply.github.com' cherry-pick -x -m 1 "$COMMIT" 2>&1 | tee -a ../reports/cip-merge.log
-              APPLY_STATUS=${PIPESTATUS[0]}
-            else
-              git -c user.name='GitHub Actions' -c user.email='actions@users.noreply.github.com' cherry-pick -x "$COMMIT" 2>&1 | tee -a ../reports/cip-merge.log
-              APPLY_STATUS=${PIPESTATUS[0]}
-            fi
-            set -e
-            if [ "$APPLY_STATUS" -ne 0 ]; then
-              git status --short | tee ../reports/cip-conflict-status.txt
-              git diff --name-only --diff-filter=U | tee ../reports/cip-conflicted-files.txt
-              git cherry-pick --abort || true
-              {
-                echo "FAIL: applying CIP delta commit \`${COMMIT}\` failed."
-                echo "Commit subject: \`${SUBJECT}\`"
-                echo 'Conflicts/status are recorded in cip-conflicted-files.txt and cip-conflict-status.txt. Build is blocked; do not auto-resolve by taking one side wholesale.'
-              } | tee -a ../reports/build-audit.md
-              echo 'cip_ok=false' >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-          done
-
-          if ! git grep -n -E 'cip136|CIP 4\.19\.325-cip136' -- Makefile localversion-cip 2>/dev/null; then
-            echo 'WARN: no explicit cip136 version string found in the expected files; inspect resulting kernel version before proceeding.' | tee -a ../reports/build-audit.md
-          fi
-          echo "Post-CIP HEAD: \`$(git rev-parse HEAD)\`" | tee -a ../reports/build-audit.md
-          echo 'PASS: CIP release delta applied without conflicts. This does not replace a successful compile and device validation.' | tee -a ../reports/build-audit.md
-          echo 'cip_ok=true' >> "$GITHUB_OUTPUT"
-
-      - name: Check clean source and prepare BakaSU
-        id: bakasu
-        if: steps.cip.outputs.cip_ok == 'true'
-        continue-on-error: true
+      - name: Compare ancestry and stable patch IDs
+        id: audit
+        if: steps.cip.outputs.cip_refs_ok == 'true'
         env:
-          BAKASU_REF: ${{ inputs.bakasu_ref }}
+          CIP_BASE_REF: ${{ inputs.cip_base_ref }}
+          CIP_TARGET_REF: ${{ inputs.cip_target_ref }}
+          KERNEL_BRANCH: ${{ inputs.kernel_branch }}
+          SOURCE_SINCE: ${{ inputs.source_since }}
+          SOURCE_COMMIT_LIMIT: ${{ inputs.source_commit_limit }}
+        shell: bash
         run: |
           set -Eeuo pipefail
-          cd kernel
-          {
-            echo
-            echo '## BakaSU integration'
-            echo
-          } | tee -a ../reports/build-audit.md
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess, sys
+          from collections import defaultdict
 
-          # Do not run BakaSU setup over an existing root implementation: the setup script edits drivers/Makefile and drivers/Kconfig.
-          if [ -e KernelSU ] || [ -e drivers/kernelsu ] || grep -Eq 'CONFIG_KSU|ksu_handle_' fs/exec.c; then
-            echo 'FAIL: source appears to contain an existing KernelSU-family integration. Refusing to overwrite/stack root implementations.' | tee -a ../reports/build-audit.md
-            echo 'bakasu_ok=false' >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
+          root = pathlib.Path.cwd()
+          reports = root / 'reports'
+          repo = root / 'kernel'
+          since = os.environ['SOURCE_SINCE']
+          until = '2026-10-20'
+          limit = int(os.environ['SOURCE_COMMIT_LIMIT'])
+          base_ref = os.environ['CIP_BASE_REF']
+          target_ref = os.environ['CIP_TARGET_REF']
 
-          if ! curl --fail --location --silent --show-error \
-            https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh \
-            -o ../reports/bakasu-setup.sh; then
-            echo 'FAIL: could not download BakaSU setup.sh.' | tee -a ../reports/build-audit.md
-            echo 'bakasu_ok=false' >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          if ! sh -n ../reports/bakasu-setup.sh; then
-            echo 'FAIL: downloaded BakaSU setup.sh failed shell syntax validation.' | tee -a ../reports/build-audit.md
-            echo 'bakasu_ok=false' >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          echo 'Downloaded BakaSU setup script and passed shell syntax check.' | tee -a ../reports/build-audit.md
-          if ! bash ../reports/bakasu-setup.sh "$BAKASU_REF" 2>&1 | tee ../reports/bakasu-setup.log; then
-            echo 'FAIL: BakaSU setup script failed. See bakasu-setup.log.' | tee -a ../reports/build-audit.md
-            echo 'bakasu_ok=false' >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          if [ ! -e drivers/kernelsu ] || [ ! -f KernelSU/kernel/Kconfig ]; then
-            echo 'FAIL: BakaSU setup did not create expected drivers/kernelsu link or KernelSU Kconfig.' | tee -a ../reports/build-audit.md
-            echo 'bakasu_ok=false' >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          echo "BakaSU checkout: \`$(git -C KernelSU rev-parse HEAD)\`" | tee -a ../reports/build-audit.md
-          echo 'PASS: BakaSU setup completed.' | tee -a ../reports/build-audit.md
-          echo 'bakasu_ok=true' >> "$GITHUB_OUTPUT"
+          def git(*args, check=True):
+              p = subprocess.run(['git', '-C', str(repo), *args], text=True,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+              if check and p.returncode:
+                  raise RuntimeError(f"git {' '.join(args)} failed: {p.stderr[-3000:]}")
+              return p
 
-      - name: Clone JackA1ltman patch reference
-        id: jack
-        if: steps.cip.outputs.cip_ok == 'true' && steps.bakasu.outputs.bakasu_ok == 'true'
-        continue-on-error: true
-        run: |
-          set -Eeuo pipefail
-          git clone --depth=1 --branch mainline "https://github.com/${JACK_REPO}.git" jack-reference
-          git -C jack-reference rev-parse HEAD | tee reports/jack-source-commit.txt
-          find jack-reference -type f \( -iname '*susfs*inline*hook*.sh' -o -iname '*inline*hook*susfs*.sh' -o -iname '*susfs*patch*.sh' \) -print | sort | tee reports/jack-patch-script-candidates.txt
-          echo 'jack_ok=true' >> "$GITHUB_OUTPUT"
+          head = git('rev-parse', 'HEAD').stdout.strip()
+          base = git('rev-parse', f'refs/tags/{base_ref}^{{commit}}').stdout.strip()
+          target = git('rev-parse', f'refs/tags/{target_ref}^{{commit}}').stdout.strip()
+          exact_ancestor = git('merge-base', '--is-ancestor', base, 'HEAD', check=False).returncode == 0
+          merge_base = git('merge-base', base, 'HEAD', check=False).stdout.strip()
+          if not merge_base:
+              merge_base = 'none (unrelated histories or shallow boundary)'
 
-      - name: Audit and apply SUSFS inline-hook patches
-        id: compatibility
-        if: always() && steps.cip.outputs.cip_ok == 'true' && steps.bakasu.outputs.bakasu_ok == 'true' && steps.jack.outputs.jack_ok == 'true'
-        env:
-          RUN_HOOK_AUDIT: ${{ inputs.run_inline_hook_audit }}
-        run: |
-          set -u
-          REPORT=reports/build-audit.md
-          {
-            echo
-            echo '## SUSFS + inline-hook compatibility gate'
-            echo
-            echo 'This stage deliberately runs after BakaSU setup. A patch script failure or explicit ReSukiSU-only requirement blocks compilation.'
-          } | tee -a "$REPORT"
+          # Enumerate the complete DAG delta, including commits brought in through merges.
+          cip_commits = git('rev-list', '--reverse', f'{base}..{target}').stdout.splitlines()
+          cip_rows = []
+          cip_ids = defaultdict(list)
+          for sha in cip_commits:
+              parents = git('rev-list', '--parents', '-n', '1', sha).stdout.split()
+              subject = git('show', '-s', '--format=%s', sha).stdout.strip()
+              if len(parents) > 2:
+                  cip_rows.append({'sha': sha, 'subject': subject, 'kind': 'merge', 'patch_id': None})
+                  continue
+              # First-parent diff for normal commits. Root commits are not expected in a release delta.
+              patch = git('show', '--format=', '--no-ext-diff', '--binary', '--no-renames', sha, check=False)
+              if patch.returncode or not patch.stdout.strip():
+                  cip_rows.append({'sha': sha, 'subject': subject, 'kind': 'empty-or-unavailable-diff', 'patch_id': None})
+                  continue
+              pid_out = subprocess.run(['git', 'patch-id', '--stable'], input=patch.stdout, text=True,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+              pid = pid_out.stdout.split()[0] if pid_out.stdout.split() else None
+              if pid:
+                  cip_ids[pid].append(sha)
+              cip_rows.append({'sha': sha, 'subject': subject, 'kind': 'commit', 'patch_id': pid})
 
-          if [ "$RUN_HOOK_AUDIT" != 'true' ]; then
-            echo 'FAIL: inline-hook audit was disabled; build is blocked because compatibility was not established.' | tee -a "$REPORT"
-            echo 'compatible=false' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          # Compare against recent source commits, including merge commits excluded from patch-id matching.
+          # The bounded window prevents an unbounded scan; the report states its coverage explicitly.
+          src_shas = git('log', '--no-merges', f'--since={since}', f'--until={until}',
+                         f'-n{limit}', '--format=%H', 'HEAD').stdout.splitlines()
+          source_patch_matches = defaultdict(list)
+          source_rows = []
+          for idx, sha in enumerate(src_shas, 1):
+              patch = git('show', '--format=', '--no-ext-diff', '--binary', '--no-renames', sha, check=False)
+              if patch.returncode or not patch.stdout.strip():
+                  continue
+              pid_out = subprocess.run(['git', 'patch-id', '--stable'], input=patch.stdout, text=True,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+              tokens = pid_out.stdout.split()
+              if tokens:
+                  pid = tokens[0]
+                  source_patch_matches[pid].append(sha)
+              if idx % 500 == 0:
+                  print(f'Processed {idx}/{len(src_shas)} source commits for patch IDs', flush=True)
 
-          PATCH_SCRIPT="$(find jack-reference -type f -iname 'susfs_inline_hook_patches.sh' -print -quit)"
-          if [ -z "$PATCH_SCRIPT" ]; then
-            echo 'FAIL: susfs_inline_hook_patches.sh was not found in the selected JackA1ltman branch.' | tee -a "$REPORT"
-            echo 'compatible=false' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "Patch script: \`${PATCH_SCRIPT}\`" | tee -a "$REPORT"
-          bash -n "$PATCH_SCRIPT" || {
-            echo 'FAIL: patch script did not pass bash syntax validation.' | tee -a "$REPORT"
-            echo 'compatible=false' >> "$GITHUB_OUTPUT"
-            exit 0
+          matched = []
+          unmatched = []
+          merge_or_empty = []
+          for row in cip_rows:
+              pid = row['patch_id']
+              if not pid:
+                  merge_or_empty.append(row)
+              elif pid in source_patch_matches:
+                  row['source_match_commits'] = source_patch_matches[pid]
+                  matched.append(row)
+              else:
+                  unmatched.append(row)
+
+          # Source history graph can be shallow. Do not claim a definitive ancestry failure if the
+          # common point is outside fetched history; report exact source/CIP relationship separately.
+          source_shallow = (repo / '.git' / 'shallow').exists()
+          result = {
+              'source_repo': 'mt6768-dev/android_kernel_xiaomi_earth',
+              'source_branch': os.environ.get('KERNEL_BRANCH', 'lineage-23.2'),
+              'source_head': head,
+              'source_shallow_clone': source_shallow,
+              'source_history_window': {'since_committer_date': since, 'until_committer_date_exclusive': until,
+                                        'max_non_merge_commits': limit, 'commits_scanned': len(src_shas)},
+              'cip_baseline': {'ref': base_ref, 'sha': base},
+              'cip_target': {'ref': target_ref, 'sha': target},
+              'cip_baseline_is_ancestor_of_target': git('merge-base', '--is-ancestor', base, target, check=False).returncode == 0,
+              'cip_baseline_exact_sha_is_ancestor_of_source_head': exact_ancestor,
+              'source_cip_merge_base': merge_base,
+              'cip_delta_commit_count_including_merges': len(cip_commits),
+              'cip_nonmerge_patch_count': sum(1 for x in cip_rows if x['patch_id']),
+              'cip_patch_ids_exactly_matched_in_source_window': len(matched),
+              'cip_patch_ids_not_found_in_source_window': len(unmatched),
+              'cip_merges_empty_or_unavailable_diffs': len(merge_or_empty),
+              'matched': matched,
+              'unmatched': unmatched,
+              'merge_or_empty': merge_or_empty,
+              'interpretation': 'Exact stable patch-id matches are evidence of matching changes in the scanned source history, not proof the final tree still contains them. No match is not proof the patch is absent: it may be edited, squashed, outside the date/commit window, or hidden by shallow history. This audit does not apply patches or build a kernel.'
           }
+          (reports / 'cip-patch-audit.json').write_text(json.dumps(result, indent=2) + '\n')
+          with (reports / 'cip-patch-audit.csv').open('w') as f:
+              f.write('status,cip_sha,patch_id,subject,source_match_commits\n')
+              for row in cip_rows:
+                  status = 'merge-or-empty' if not row.get('patch_id') else ('exact-match' if row.get('source_match_commits') else 'no-exact-match')
+                  matches = ';'.join(row.get('source_match_commits', []))
+                  safe_subject = row['subject'].replace('"', '""')
+                  f.write(f'{status},{row["sha"]},{row.get("patch_id") or ""},"{safe_subject}","{matches}"\n')
 
-          set +e
-          (cd kernel && bash "../$PATCH_SCRIPT") 2>&1 | tee reports/susfs-inline-hook.log
-          PATCH_STATUS=${PIPESTATUS[0]}
-          set -e
-          if [ "$PATCH_STATUS" -ne 0 ]; then
-            echo "FAIL: SUSFS inline-hook patch script exited with status ${PATCH_STATUS}. See susfs-inline-hook.log." | tee -a "$REPORT"
-            echo 'compatible=false' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          with (reports / 'audit.md').open('a') as f:
+              f.write('\n## Ancestry result\n\n')
+              f.write(f'- Source HEAD: `{head}`\n')
+              f.write(f'- CIP baseline exact SHA ancestor of source HEAD: **{exact_ancestor}**\n')
+              f.write(f'- Source/CIP merge-base: `{merge_base}`\n')
+              f.write(f'- Source clone shallow: **{source_shallow}**\n')
+              f.write('\nA false exact-ancestor result is not itself a failure: the device tree may contain equivalent CIP changes via different commits.\n')
+              f.write('\n## Stable patch-ID comparison\n\n')
+              f.write(f'- CIP DAG delta commits (including merges): {len(cip_commits)}\n')
+              f.write(f'- CIP non-merge commits with patch IDs: {result["cip_nonmerge_patch_count"]}\n')
+              f.write(f'- Exact patch-ID matches in source window: {len(matched)}\n')
+              f.write(f'- CIP patch IDs without exact match in source window: {len(unmatched)}\n')
+              f.write(f'- Merge/empty/unavailable diffs requiring separate inspection: {len(merge_or_empty)}\n')
+              f.write(f'- Source non-merge commits scanned: {len(src_shas)} (committer dates {since} through {until}, exclusive)\n')
+              f.write('\n### Exact matches\n\n')
+              if matched:
+                  for row in matched:
+                      f.write(f'- CIP `{row["sha"][:12]}` ↔ source `{", ".join(x[:12] for x in row.get("source_match_commits", []))}` — {row["subject"]}\n')
+              else:
+                  f.write('- No exact stable patch-ID matches found in the scanned source window.\n')
+              f.write('\n### No exact match in scanned window (not proof of absence)\n\n')
+              for row in unmatched[:200]:
+                  f.write(f'- `{row["sha"][:12]}` — {row["subject"]}\n')
+              if len(unmatched) > 200:
+                  f.write(f'- ... plus {len(unmatched)-200} additional entries in `cip-patch-audit.csv`.\n')
+              f.write('\n## Safety decision\n\n')
+              f.write('**AUDIT ONLY. No CIP commits were applied. No BakaSU/SUSFS/inline-hook scripts were run. No kernel was built.**\n')
+              f.write('Use this report to plan a reviewed port. Do not automatically cherry-pick all unmatched commits: merge commits, context-dependent changes, and downstream modifications require manual review.\n')
+          print(f"Audit complete: {len(matched)} exact matches; {len(unmatched)} unmatched patch IDs; {len(merge_or_empty)} merge/empty diffs.")
+          PY
 
-          # The JackA1ltman inline-hook checker has historically required ReSukiSU-specific hook symbols.
-          # Never silently treat a successful shell exit as proof that BakaSU is compatible.
-          if grep -Eiq 'integrate ReSukiSU|ReSukiSU in your kernel|ksu_handle_setresuid hook' reports/susfs-inline-hook.log; then
-            echo 'FAIL: patch output indicates a ReSukiSU-specific hook requirement. BakaSU is the selected root solution, so this combination is rejected.' | tee -a "$REPORT"
-            echo 'compatible=false' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if ! grep -RqsE 'CONFIG_KSU_SUSFS|SUSFS_VERSION|susfs_' kernel/fs kernel/include kernel/drivers 2>/dev/null; then
-            echo 'FAIL: no SUSFS-related source/config markers found after patch script; SUSFS integration could not be verified.' | tee -a "$REPORT"
-            echo 'compatible=false' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # Detect the known compile-time guard from JackA1ltman's inline-hook path before starting a long build.
-          if grep -RqsE 'You should integrate ReSukiSU in your kernel|You lost ksu_handle_setresuid hook' kernel/KernelSU kernel/drivers/kernelsu 2>/dev/null; then
-            echo 'FAIL: the patched source contains JackA1ltman inline-hook checks requiring ReSukiSU. This workflow prioritizes BakaSU, so compilation is blocked rather than producing a known-incompatible kernel.' | tee -a "$REPORT"
-            echo 'compatible=false' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo 'PASS: patch script returned success, SUSFS markers were found, and no known ReSukiSU-only compile guard was detected. This is a source-level gate only; runtime compatibility still requires device testing.' | tee -a "$REPORT"
-          echo 'compatible=true' >> "$GITHUB_OUTPUT"
-
-      - name: Build kernel and package AnyKernel3 ZIP
-        id: compile
-        if: steps.cip.outputs.cip_ok == 'true' && steps.bakasu.outputs.bakasu_ok == 'true' && steps.compatibility.outputs.compatible == 'true'
-        run: |
-          set -Eeuo pipefail
-          cd kernel
-          mkdir -p out
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 "$DEFCONFIG"
-          scripts/config --file out/.config -e KSU -e KALLSYMS -e KALLSYMS_ALL
-          if grep -Rqs 'config KSU_SUSFS' fs include drivers; then
-            scripts/config --file out/.config -e KSU_SUSFS
-          fi
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
-          grep -q '^CONFIG_KSU=y' out/.config || { echo 'CONFIG_KSU did not survive olddefconfig' | tee -a ../reports/build-audit.md; exit 1; }
-          make -j"$(nproc)" O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz-dtb 2>&1 | tee ../reports/kernel-build.log
-
-          IMAGE='out/arch/arm64/boot/Image.gz-dtb'
-          if [ ! -s "$IMAGE" ]; then
-            IMAGE='out/arch/arm64/boot/Image.gz'
-          fi
-          if [ ! -s "$IMAGE" ]; then
-            IMAGE='out/arch/arm64/boot/Image'
-          fi
-          if [ ! -s "$IMAGE" ]; then
-            echo 'FAIL: no Image.gz-dtb, Image.gz, or Image output found.' | tee -a ../reports/build-audit.md
-            exit 1
-          fi
-
-          cd ..
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
-          cp "kernel/$IMAGE" anykernel/"$(basename "$IMAGE")"
-          # Restrict installer device check to Redmi 12C codename earth.
-          sed -i '/^device\.name[0-9]*=/d' anykernel/anykernel.sh
-          if grep -q '^do.devicecheck=' anykernel/anykernel.sh; then
-            sed -i '/^do.devicecheck=/a device.name1=earth' anykernel/anykernel.sh
-          else
-            echo 'FAIL: AnyKernel3 template has no do.devicecheck setting; refusing to package an unchecked installer.' | tee -a reports/build-audit.md
-            exit 1
-          fi
-          (
-            cd anykernel
-            zip -r9 "../Redmi12C-BakaSU-CIP136-Delta-SUSFS.zip" . -x '.git/*' 'README.md' 'LICENSE' '*.zip'
-          )
-          sha256sum "Redmi12C-BakaSU-CIP136-Delta-SUSFS.zip" | tee reports/kernel-zip.sha256
-          sha256sum "kernel/$IMAGE" | tee reports/kernel-image.sha256
-          echo "Built image: \`${IMAGE}\`" | tee -a reports/build-audit.md
-          echo 'Build/package step completed. This ZIP has not been tested on a physical device.' | tee -a reports/build-audit.md
-
-      - name: Record skipped stages
-        if: always()
-        run: |
-          {
-            echo
-            echo '## Final status'
-            echo
-            echo "- CIP gate: \`${{ steps.cip.outputs.cip_ok || 'not-run' }}\`"
-            echo "- BakaSU setup: \`${{ steps.bakasu.outputs.bakasu_ok || 'not-run' }}\`"
-            echo "- SUSFS/inline-hook compatibility: \`${{ steps.compatibility.outputs.compatible || 'not-run' }}\`"
-            echo "- Compile step outcome: \`${{ steps.compile.outcome || 'not-run' }}\`"
-            echo
-            echo 'If compatibility is false, compilation is intentionally skipped. Review all logs before changing the gate.'
-          } >> reports/build-audit.md
-
-      - name: Upload audit report and build outputs
+      - name: Upload audit reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: redmi12c-bakasu-cip136-delta-susfs-audit
+          name: redmi12c-cip-ancestry-patch-audit
+          path: reports/
           if-no-files-found: warn
-          retention-days: 14
-          path: |
-            reports/
-            Redmi12C-BakaSU-CIP136-Delta-SUSFS.zip
-            kernel/out/.config
-            kernel/out/arch/arm64/boot/Image*
-            kernel/.config
-
-      - name: Fail closed when source integration is incompatible
-        if: always() && (steps.cip.outputs.cip_ok != 'true' || steps.bakasu.outputs.bakasu_ok != 'true' || steps.compatibility.outputs.compatible != 'true')
-        run: |
-          echo 'BUILD BLOCKED: CIP integration, BakaSU setup, or SUSFS/inline-hook compatibility did not pass.'
-          echo 'Download the audit artifact and inspect reports/build-audit.md and the detailed logs.'
-          exit 1
+          retention-days: 30
