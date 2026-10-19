@@ -1,0 +1,342 @@
+name: Redmi 12C Earth - BakaSU + CIP136 + SUSFS Compatibility Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_branch:
+        description: 'Kernel source branch'
+        required: true
+        default: 'lineage-23.2'
+        type: string
+      cip_ref:
+        description: 'Official CIP tag to integrate (review/update when a newer non-RT release is available)'
+        required: true
+        default: 'v4.19.325-cip136'
+        type: string
+      bakasu_ref:
+        description: 'BakaSU ref passed to its setup script'
+        required: true
+        default: 'main'
+        type: string
+      run_inline_hook_audit:
+        description: 'Run JackA1ltman SUSFS + inline-hook patch script; incompatibility blocks build'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  KERNEL_REPO: mt6768-dev/android_kernel_xiaomi_earth
+  JACK_REPO: JackA1ltman/NonGKI_Kernel_Build_2nd
+  ARCH: arm64
+  DEFCONFIG: earth_defconfig
+  TZ: Asia/Jakarta
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ccache clang-18 clang-tools-18 \
+            cpio flex git libelf-dev libncurses-dev libssl-dev lld-18 \
+            llvm-18 python3 python3-pip rsync unzip zip wget curl dwarves
+          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
+          sudo ln -sf /usr/bin/ld.lld-18 /usr/local/bin/ld.lld
+          clang --version | head -n 1
+          ld.lld --version | head -n 1
+
+      - name: Checkout kernel source
+        id: kernel
+        uses: actions/checkout@v4
+        with:
+          repository: mt6768-dev/android_kernel_xiaomi_earth
+          ref: ${{ inputs.kernel_branch }}
+          path: kernel
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Initialize audit report
+        env:
+          KERNEL_BRANCH: ${{ inputs.kernel_branch }}
+          REQUESTED_CIP_REF: ${{ inputs.cip_ref }}
+          REQUESTED_BAKASU_REF: ${{ inputs.bakasu_ref }}
+        run: |
+          mkdir -p reports
+          {
+            echo '# Redmi 12C Kernel Build Audit'
+            echo
+            echo "- Source: \`${KERNEL_REPO}@${KERNEL_BRANCH}\`"
+            echo "- Requested CIP ref: \`${REQUESTED_CIP_REF}\`"
+            echo "- BakaSU ref: \`${REQUESTED_BAKASU_REF}\`"
+            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+          } > reports/build-audit.md
+          git -C kernel rev-parse HEAD | tee reports/source-commit.txt
+
+      - name: Integrate official CIP tag safely
+        id: cip
+        continue-on-error: true
+        env:
+          CIP_REF: ${{ inputs.cip_ref }}
+        run: |
+          set -Eeuo pipefail
+          cd kernel
+          {
+            echo '## CIP integration'
+            echo
+            echo "Requested ref: \`${CIP_REF}\`"
+            echo 'Remote: https://kernel.googlesource.com/pub/scm/linux/kernel/git/cip/linux-cip'
+          } | tee -a ../reports/build-audit.md
+
+          git remote add cip https://kernel.googlesource.com/pub/scm/linux/kernel/git/cip/linux-cip
+          if ! git fetch --no-tags cip "refs/tags/${CIP_REF}:refs/tags/${CIP_REF}"; then
+            echo 'FAIL: Could not fetch requested CIP tag. Check spelling/tag availability.' | tee -a ../reports/build-audit.md
+            echo 'cip_ok=false' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          CIP_COMMIT="$(git rev-parse "refs/tags/${CIP_REF}^{commit}")"
+          echo "CIP commit: \`${CIP_COMMIT}\`" | tee -a ../reports/build-audit.md
+
+          if git merge-base --is-ancestor "$CIP_COMMIT" HEAD; then
+            echo 'PASS: source HEAD already contains the requested CIP commit.' | tee -a ../reports/build-audit.md
+          else
+            if ! git merge-base HEAD "$CIP_COMMIT" >/dev/null; then
+              echo 'FAIL: no common Git ancestor between device source and official CIP tag; refusing unsafe wholesale import.' | tee -a ../reports/build-audit.md
+              echo 'cip_ok=false' >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            set +e
+            git -c user.name='GitHub Actions' -c user.email='actions@users.noreply.github.com' merge --no-edit --no-ff "$CIP_COMMIT" 2>&1 | tee ../reports/cip-merge.log
+            MERGE_STATUS=${PIPESTATUS[0]}
+            set -e
+            if [ "$MERGE_STATUS" -ne 0 ]; then
+              git merge --abort || true
+              echo 'FAIL: CIP merge has conflicts. Build blocked; resolve and review the merge in a dedicated source branch first.' | tee -a ../reports/build-audit.md
+              echo 'cip_ok=false' >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            echo 'PASS: CIP merge completed without conflicts.' | tee -a ../reports/build-audit.md
+          fi
+
+          if [ ! -f localversion-cip ] || ! grep -Fq 'cip136' localversion-cip; then
+            echo "FAIL: localversion-cip does not identify cip136. Refusing to label a non-cip136 tree as CIP136." | tee -a ../reports/build-audit.md
+            echo 'cip_ok=false' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "Post-CIP HEAD: \`$(git rev-parse HEAD)\`" | tee -a ../reports/build-audit.md
+          echo 'cip_ok=true' >> "$GITHUB_OUTPUT"
+
+      - name: Check clean source and prepare BakaSU
+        id: bakasu
+        if: steps.cip.outputs.cip_ok == 'true'
+        continue-on-error: true
+        env:
+          BAKASU_REF: ${{ inputs.bakasu_ref }}
+        run: |
+          set -Eeuo pipefail
+          cd kernel
+          {
+            echo
+            echo '## BakaSU integration'
+            echo
+          } | tee -a ../reports/build-audit.md
+
+          # Do not run BakaSU setup over an existing root implementation: the setup script edits drivers/Makefile and drivers/Kconfig.
+          if [ -e KernelSU ] || [ -e drivers/kernelsu ] || grep -Eq 'CONFIG_KSU|ksu_handle_' fs/exec.c; then
+            echo 'FAIL: source appears to contain an existing KernelSU-family integration. Refusing to overwrite/stack root implementations.' | tee -a ../reports/build-audit.md
+            echo 'bakasu_ok=false' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          if ! curl --fail --location --silent --show-error \
+            https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh \
+            -o ../reports/bakasu-setup.sh; then
+            echo 'FAIL: could not download BakaSU setup.sh.' | tee -a ../reports/build-audit.md
+            echo 'bakasu_ok=false' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          if ! sh -n ../reports/bakasu-setup.sh; then
+            echo 'FAIL: downloaded BakaSU setup.sh failed shell syntax validation.' | tee -a ../reports/build-audit.md
+            echo 'bakasu_ok=false' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo 'Downloaded BakaSU setup script and passed shell syntax check.' | tee -a ../reports/build-audit.md
+          if ! bash ../reports/bakasu-setup.sh "$BAKASU_REF" 2>&1 | tee ../reports/bakasu-setup.log; then
+            echo 'FAIL: BakaSU setup script failed. See bakasu-setup.log.' | tee -a ../reports/build-audit.md
+            echo 'bakasu_ok=false' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          if [ ! -e drivers/kernelsu ] || [ ! -f KernelSU/kernel/Kconfig ]; then
+            echo 'FAIL: BakaSU setup did not create expected drivers/kernelsu link or KernelSU Kconfig.' | tee -a ../reports/build-audit.md
+            echo 'bakasu_ok=false' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "BakaSU checkout: \`$(git -C KernelSU rev-parse HEAD)\`" | tee -a ../reports/build-audit.md
+          echo 'PASS: BakaSU setup completed.' | tee -a ../reports/build-audit.md
+          echo 'bakasu_ok=true' >> "$GITHUB_OUTPUT"
+
+      - name: Clone JackA1ltman patch reference
+        id: jack
+        if: steps.cip.outputs.cip_ok == 'true' && steps.bakasu.outputs.bakasu_ok == 'true'
+        continue-on-error: true
+        run: |
+          set -Eeuo pipefail
+          git clone --depth=1 --branch mainline "https://github.com/${JACK_REPO}.git" jack-reference
+          git -C jack-reference rev-parse HEAD | tee reports/jack-source-commit.txt
+          find jack-reference -type f \( -iname '*susfs*inline*hook*.sh' -o -iname '*inline*hook*susfs*.sh' -o -iname '*susfs*patch*.sh' \) -print | sort | tee reports/jack-patch-script-candidates.txt
+          echo 'jack_ok=true' >> "$GITHUB_OUTPUT"
+
+      - name: Audit and apply SUSFS inline-hook patches
+        id: compatibility
+        if: always() && steps.cip.outputs.cip_ok == 'true' && steps.bakasu.outputs.bakasu_ok == 'true' && steps.jack.outputs.jack_ok == 'true'
+        env:
+          RUN_HOOK_AUDIT: ${{ inputs.run_inline_hook_audit }}
+        run: |
+          set -u
+          REPORT=reports/build-audit.md
+          {
+            echo
+            echo '## SUSFS + inline-hook compatibility gate'
+            echo
+            echo 'This stage deliberately runs after BakaSU setup. A patch script failure or explicit ReSukiSU-only requirement blocks compilation.'
+          } | tee -a "$REPORT"
+
+          if [ "$RUN_HOOK_AUDIT" != 'true' ]; then
+            echo 'FAIL: inline-hook audit was disabled; build is blocked because compatibility was not established.' | tee -a "$REPORT"
+            echo 'compatible=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PATCH_SCRIPT="$(find jack-reference -type f -iname 'susfs_inline_hook_patches.sh' -print -quit)"
+          if [ -z "$PATCH_SCRIPT" ]; then
+            echo 'FAIL: susfs_inline_hook_patches.sh was not found in the selected JackA1ltman branch.' | tee -a "$REPORT"
+            echo 'compatible=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Patch script: \`${PATCH_SCRIPT}\`" | tee -a "$REPORT"
+          bash -n "$PATCH_SCRIPT" || {
+            echo 'FAIL: patch script did not pass bash syntax validation.' | tee -a "$REPORT"
+            echo 'compatible=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          set +e
+          (cd kernel && bash "../$PATCH_SCRIPT") 2>&1 | tee reports/susfs-inline-hook.log
+          PATCH_STATUS=${PIPESTATUS[0]}
+          set -e
+          if [ "$PATCH_STATUS" -ne 0 ]; then
+            echo "FAIL: SUSFS inline-hook patch script exited with status ${PATCH_STATUS}. See susfs-inline-hook.log." | tee -a "$REPORT"
+            echo 'compatible=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The JackA1ltman inline-hook checker has historically required ReSukiSU-specific hook symbols.
+          # Never silently treat a successful shell exit as proof that BakaSU is compatible.
+          if grep -Eiq 'integrate ReSukiSU|ReSukiSU in your kernel|ksu_handle_setresuid hook' reports/susfs-inline-hook.log; then
+            echo 'FAIL: patch output indicates a ReSukiSU-specific hook requirement. BakaSU is the selected root solution, so this combination is rejected.' | tee -a "$REPORT"
+            echo 'compatible=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! grep -RqsE 'CONFIG_KSU_SUSFS|SUSFS_VERSION|susfs_' kernel/fs kernel/include kernel/drivers 2>/dev/null; then
+            echo 'FAIL: no SUSFS-related source/config markers found after patch script; SUSFS integration could not be verified.' | tee -a "$REPORT"
+            echo 'compatible=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Detect the known compile-time guard from JackA1ltman's inline-hook path before starting a long build.
+          if grep -RqsE 'You should integrate ReSukiSU in your kernel|You lost ksu_handle_setresuid hook' kernel/KernelSU kernel/drivers/kernelsu 2>/dev/null; then
+            echo 'FAIL: the patched source contains JackA1ltman inline-hook checks requiring ReSukiSU. This workflow prioritizes BakaSU, so compilation is blocked rather than producing a known-incompatible kernel.' | tee -a "$REPORT"
+            echo 'compatible=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo 'PASS: patch script returned success, SUSFS markers were found, and no known ReSukiSU-only compile guard was detected. This is a source-level gate only; runtime compatibility still requires device testing.' | tee -a "$REPORT"
+          echo 'compatible=true' >> "$GITHUB_OUTPUT"
+
+      - name: Build kernel and package AnyKernel3 ZIP
+        id: compile
+        if: steps.cip.outputs.cip_ok == 'true' && steps.bakasu.outputs.bakasu_ok == 'true' && steps.compatibility.outputs.compatible == 'true'
+        run: |
+          set -Eeuo pipefail
+          cd kernel
+          mkdir -p out
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 "$DEFCONFIG"
+          scripts/config --file out/.config -e KSU -e KALLSYMS -e KALLSYMS_ALL
+          if grep -Rqs 'config KSU_SUSFS' fs include drivers; then
+            scripts/config --file out/.config -e KSU_SUSFS
+          fi
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
+          grep -q '^CONFIG_KSU=y' out/.config || { echo 'CONFIG_KSU did not survive olddefconfig' | tee -a ../reports/build-audit.md; exit 1; }
+          make -j"$(nproc)" O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz-dtb 2>&1 | tee ../reports/kernel-build.log
+
+          IMAGE='out/arch/arm64/boot/Image.gz-dtb'
+          if [ ! -s "$IMAGE" ]; then
+            IMAGE='out/arch/arm64/boot/Image.gz'
+          fi
+          if [ ! -s "$IMAGE" ]; then
+            IMAGE='out/arch/arm64/boot/Image'
+          fi
+          if [ ! -s "$IMAGE" ]; then
+            echo 'FAIL: no Image.gz-dtb, Image.gz, or Image output found.' | tee -a ../reports/build-audit.md
+            exit 1
+          fi
+
+          cd ..
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
+          cp "kernel/$IMAGE" anykernel/"$(basename "$IMAGE")"
+          # Restrict installer device check to Redmi 12C codename earth.
+          sed -i '/^device\.name[0-9]*=/d' anykernel/anykernel.sh
+          if grep -q '^do.devicecheck=' anykernel/anykernel.sh; then
+            sed -i '/^do.devicecheck=/a device.name1=earth' anykernel/anykernel.sh
+          else
+            echo 'FAIL: AnyKernel3 template has no do.devicecheck setting; refusing to package an unchecked installer.' | tee -a reports/build-audit.md
+            exit 1
+          fi
+          (
+            cd anykernel
+            zip -r9 "../Redmi12C-BakaSU-CIP136-SUSFS.zip" . -x '.git/*' 'README.md' 'LICENSE' '*.zip'
+          )
+          sha256sum "Redmi12C-BakaSU-CIP136-SUSFS.zip" | tee reports/kernel-zip.sha256
+          sha256sum "kernel/$IMAGE" | tee reports/kernel-image.sha256
+          echo "Built image: \`${IMAGE}\`" | tee -a reports/build-audit.md
+          echo 'Build/package step completed. This ZIP has not been tested on a physical device.' | tee -a reports/build-audit.md
+
+      - name: Record skipped stages
+        if: always()
+        run: |
+          {
+            echo
+            echo '## Final status'
+            echo
+            echo "- CIP gate: \`${{ steps.cip.outputs.cip_ok || 'not-run' }}\`"
+            echo "- BakaSU setup: \`${{ steps.bakasu.outputs.bakasu_ok || 'not-run' }}\`"
+            echo "- SUSFS/inline-hook compatibility: \`${{ steps.compatibility.outputs.compatible || 'not-run' }}\`"
+            echo "- Compile step outcome: \`${{ steps.compile.outcome || 'not-run' }}\`"
+            echo
+            echo 'If compatibility is false, compilation is intentionally skipped. Review all logs before changing the gate.'
+          } >> reports/build-audit.md
+
+      - name: Upload audit report and build outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: redmi12c-bakasu-cip136-susfs-audit
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            reports/
+            Redmi12C-BakaSU-CIP136-SUSFS.zip
+            kernel/out/.config
+            kernel/out/arch/arm64/boot/Image*
+            kernel/.config
+
+      - name: Fail closed when source integration is incompatible
+        if: always() && (steps.cip.outputs.cip_ok != 'true' || steps.bakasu.outputs.bakasu_ok != 'true' || steps.compatibility.outputs.compatible != 'true')
+        run: |
+          echo 'BUILD BLOCKED: CIP integration, BakaSU setup, or SUSFS/inline-hook compatibility did not pass.'
+          echo 'Download the audit artifact and inspect reports/build-audit.md and the detailed logs.'
+          exit 1
