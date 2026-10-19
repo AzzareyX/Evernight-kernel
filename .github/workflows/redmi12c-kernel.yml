@@ -1,4 +1,4 @@
-name: Redmi 12C - CIP Ancestry and Patch Audit (Retry)
+name: Redmi 12C - CIP Ancestry and Patch Audit (Slow Network Fix)
 
 on:
   workflow_dispatch:
@@ -24,9 +24,9 @@ on:
         default: '2026-04-01'
         type: string
       source_commit_limit:
-        description: 'Maximum source commits to scan'
+        description: 'Maximum source commits to scan (start small to reduce transfer)'
         required: true
-        default: '3000'
+        default: '500'
         type: string
 
 permissions:
@@ -58,7 +58,7 @@ jobs:
             echo
           } > reports/audit.md
 
-      - name: Clone kernel history with HTTP/1.1 and retries
+      - name: Clone limited kernel history with relaxed speed timeout and retries
         id: source
         env:
           KERNEL_BRANCH: ${{ inputs.kernel_branch }}
@@ -69,8 +69,11 @@ jobs:
           # GitHub's HTTP/2 stream error can interrupt large filtered shallow clones.
           # Prefer HTTP/1.1 and retry the operation; keep reports even on failure.
           git config --global http.version HTTP/1.1
-          git config --global http.lowSpeedLimit 1000
-          git config --global http.lowSpeedTime 60
+          # Do not enforce a low-speed cutoff: GitHub-hosted runners can have
+          # long pauses while negotiating filtered/shallow history.
+          git config --global http.lowSpeedLimit 0
+          git config --global http.lowSpeedTime 0
+          git config --global http.postBuffer 524288000
           git config --global fetch.fsckObjects true
           URL="https://github.com/mt6768-dev/android_kernel_xiaomi_earth.git"
           LIMIT="${SOURCE_COMMIT_LIMIT}"
@@ -81,7 +84,7 @@ jobs:
           attempt=1
           max_attempts=3
           until git clone --filter=blob:none --no-checkout --single-branch \
-              --branch "$KERNEL_BRANCH" --depth="$LIMIT" "$URL" kernel; do
+              --branch "$KERNEL_BRANCH" --depth="$LIMIT" --no-tags "$URL" kernel; do
             rc=$?
             echo "Clone attempt ${attempt}/${max_attempts} failed (exit ${rc})." | tee -a reports/audit.md
             rm -rf kernel
@@ -90,7 +93,7 @@ jobs:
                 echo
                 echo '## Clone failure'
                 echo 'The remote clone failed after retries. No source history was audited.'
-                echo 'Likely causes include a transient GitHub transport failure or an overly large shallow-history request.'
+                echo 'Likely causes include a transient GitHub transport failure or slow filtered-history transfer. Retry with a smaller source commit limit (for example 200) or run again later.'
                 echo 'Next retry uses a smaller source commit limit; no kernel changes were made.'
               } | tee -a reports/audit.md
               exit "$rc"
@@ -304,7 +307,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: redmi12c-cip-ancestry-patch-audit-retry
+          name: redmi12c-cip-ancestry-patch-audit-slow-network-fix
           path: reports/
           if-no-files-found: warn
           retention-days: 30
