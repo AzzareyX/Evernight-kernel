@@ -56,9 +56,9 @@ env:
   KERNELSU_METHOD: "shell"
 
   PATCHES_SOURCE: "JackA1ltman/NonGKI_Kernel_Patches"
-  PATCHES_BRANCH: "main"
+  PATCHES_BRANCH: "mi_kernel"
 
-  SUSFS_FOLDER_FIXED: "4.19"
+  SUSFS_FOLDER_FIXED: "redmi_note_7_aosp_a15_419"
   SUSFS_PATCH_FIXED: ""
 
   REKERNEL_ENABLE: "false"
