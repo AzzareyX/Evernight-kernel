@@ -1,4 +1,4 @@
-name: Redmi 12C Earth - BakaSU + CIP136 + SUSFS Compatibility Gate
+name: Redmi 12C Earth - BakaSU + CIP136 Delta + SUSFS Compatibility Gate
 
 on:
   workflow_dispatch:
@@ -79,57 +79,93 @@ jobs:
           } > reports/build-audit.md
           git -C kernel rev-parse HEAD | tee reports/source-commit.txt
 
-      - name: Integrate official CIP tag safely
+      - name: Integrate CIP release delta safely (CIP134 -> CIP136)
         id: cip
         continue-on-error: true
         env:
           CIP_REF: ${{ inputs.cip_ref }}
+          CIP_BASE_REF: v4.19.325-cip134
         run: |
           set -Eeuo pipefail
           cd kernel
           {
-            echo '## CIP integration'
+            echo '## CIP release-delta integration'
             echo
-            echo "Requested ref: \`${CIP_REF}\`"
+            echo "Requested CIP target: \`${CIP_REF}\`"
+            echo "Required source baseline: \`${CIP_BASE_REF}\`"
+            echo 'Strategy: apply only the release delta, never merge the entire upstream CIP tree into the Android device tree.'
             echo 'Remote: https://kernel.googlesource.com/pub/scm/linux/kernel/git/cip/linux-cip'
           } | tee -a ../reports/build-audit.md
 
           git remote add cip https://kernel.googlesource.com/pub/scm/linux/kernel/git/cip/linux-cip
-          if ! git fetch --no-tags cip "refs/tags/${CIP_REF}:refs/tags/${CIP_REF}"; then
-            echo 'FAIL: Could not fetch requested CIP tag. Check spelling/tag availability.' | tee -a ../reports/build-audit.md
+          if ! git fetch --no-tags cip \
+            "refs/tags/${CIP_BASE_REF}:refs/tags/${CIP_BASE_REF}" \
+            "refs/tags/${CIP_REF}:refs/tags/${CIP_REF}"; then
+            echo 'FAIL: could not fetch CIP baseline/target tags. Verify tag names and availability.' | tee -a ../reports/build-audit.md
             echo 'cip_ok=false' >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          CIP_COMMIT="$(git rev-parse "refs/tags/${CIP_REF}^{commit}")"
-          echo "CIP commit: \`${CIP_COMMIT}\`" | tee -a ../reports/build-audit.md
 
-          if git merge-base --is-ancestor "$CIP_COMMIT" HEAD; then
-            echo 'PASS: source HEAD already contains the requested CIP commit.' | tee -a ../reports/build-audit.md
-          else
-            if ! git merge-base HEAD "$CIP_COMMIT" >/dev/null; then
-              echo 'FAIL: no common Git ancestor between device source and official CIP tag; refusing unsafe wholesale import.' | tee -a ../reports/build-audit.md
-              echo 'cip_ok=false' >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
+          BASE_COMMIT="$(git rev-parse "refs/tags/${CIP_BASE_REF}^{commit}")"
+          TARGET_COMMIT="$(git rev-parse "refs/tags/${CIP_REF}^{commit}")"
+          echo "CIP baseline commit: \`${BASE_COMMIT}\`" | tee -a ../reports/build-audit.md
+          echo "CIP target commit: \`${TARGET_COMMIT}\`" | tee -a ../reports/build-audit.md
+
+          if ! git merge-base --is-ancestor "$BASE_COMMIT" "$TARGET_COMMIT"; then
+            echo 'FAIL: CIP baseline tag is not an ancestor of target tag; release delta cannot be computed safely.' | tee -a ../reports/build-audit.md
+            echo 'cip_ok=false' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          if ! git merge-base --is-ancestor "$BASE_COMMIT" HEAD; then
+            echo 'FAIL: device source HEAD does not contain the exact CIP134 baseline commit. Do not force-merge CIP136; first rebase/port the device tree onto the correct CIP baseline in a reviewed branch.' | tee -a ../reports/build-audit.md
+            echo 'cip_ok=false' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          mapfile -t CIP_COMMITS < <(git rev-list --reverse --first-parent "${BASE_COMMIT}..${TARGET_COMMIT}")
+          if [ "${#CIP_COMMITS[@]}" -eq 0 ]; then
+            echo 'FAIL: no first-parent commits found between CIP baseline and target; refusing to label the source as updated.' | tee -a ../reports/build-audit.md
+            echo 'cip_ok=false' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          printf '%s\n' "${CIP_COMMITS[@]}" > ../reports/cip-commits-to-apply.txt
+          echo "Release delta contains ${#CIP_COMMITS[@]} first-parent commits." | tee -a ../reports/build-audit.md
+
+          # Apply each release delta commit in order. Merge commits are replayed relative
+          # to their first parent; any conflict aborts and blocks all downstream stages.
+          for COMMIT in "${CIP_COMMITS[@]}"; do
+            SUBJECT="$(git show -s --format=%s "$COMMIT")"
+            PARENT_COUNT="$(git rev-list --parents -n 1 "$COMMIT" | awk '{print NF-1}')"
+            echo "Applying ${COMMIT} (${SUBJECT})" | tee -a ../reports/cip-merge.log
             set +e
-            git -c user.name='GitHub Actions' -c user.email='actions@users.noreply.github.com' merge --no-edit --no-ff "$CIP_COMMIT" 2>&1 | tee ../reports/cip-merge.log
-            MERGE_STATUS=${PIPESTATUS[0]}
+            if [ "$PARENT_COUNT" -gt 1 ]; then
+              git -c user.name='GitHub Actions' -c user.email='actions@users.noreply.github.com' cherry-pick -x -m 1 "$COMMIT" 2>&1 | tee -a ../reports/cip-merge.log
+              APPLY_STATUS=${PIPESTATUS[0]}
+            else
+              git -c user.name='GitHub Actions' -c user.email='actions@users.noreply.github.com' cherry-pick -x "$COMMIT" 2>&1 | tee -a ../reports/cip-merge.log
+              APPLY_STATUS=${PIPESTATUS[0]}
+            fi
             set -e
-            if [ "$MERGE_STATUS" -ne 0 ]; then
-              git merge --abort || true
-              echo 'FAIL: CIP merge has conflicts. Build blocked; resolve and review the merge in a dedicated source branch first.' | tee -a ../reports/build-audit.md
+            if [ "$APPLY_STATUS" -ne 0 ]; then
+              git status --short | tee ../reports/cip-conflict-status.txt
+              git diff --name-only --diff-filter=U | tee ../reports/cip-conflicted-files.txt
+              git cherry-pick --abort || true
+              {
+                echo "FAIL: applying CIP delta commit \`${COMMIT}\` failed."
+                echo "Commit subject: \`${SUBJECT}\`"
+                echo 'Conflicts/status are recorded in cip-conflicted-files.txt and cip-conflict-status.txt. Build is blocked; do not auto-resolve by taking one side wholesale.'
+              } | tee -a ../reports/build-audit.md
               echo 'cip_ok=false' >> "$GITHUB_OUTPUT"
               exit 1
             fi
-            echo 'PASS: CIP merge completed without conflicts.' | tee -a ../reports/build-audit.md
-          fi
+          done
 
-          if [ ! -f localversion-cip ] || ! grep -Fq 'cip136' localversion-cip; then
-            echo "FAIL: localversion-cip does not identify cip136. Refusing to label a non-cip136 tree as CIP136." | tee -a ../reports/build-audit.md
-            echo 'cip_ok=false' >> "$GITHUB_OUTPUT"
-            exit 1
+          if ! git grep -n -E 'cip136|CIP 4\.19\.325-cip136' -- Makefile localversion-cip 2>/dev/null; then
+            echo 'WARN: no explicit cip136 version string found in the expected files; inspect resulting kernel version before proceeding.' | tee -a ../reports/build-audit.md
           fi
           echo "Post-CIP HEAD: \`$(git rev-parse HEAD)\`" | tee -a ../reports/build-audit.md
+          echo 'PASS: CIP release delta applied without conflicts. This does not replace a successful compile and device validation.' | tee -a ../reports/build-audit.md
           echo 'cip_ok=true' >> "$GITHUB_OUTPUT"
 
       - name: Check clean source and prepare BakaSU
@@ -298,9 +334,9 @@ jobs:
           fi
           (
             cd anykernel
-            zip -r9 "../Redmi12C-BakaSU-CIP136-SUSFS.zip" . -x '.git/*' 'README.md' 'LICENSE' '*.zip'
+            zip -r9 "../Redmi12C-BakaSU-CIP136-Delta-SUSFS.zip" . -x '.git/*' 'README.md' 'LICENSE' '*.zip'
           )
-          sha256sum "Redmi12C-BakaSU-CIP136-SUSFS.zip" | tee reports/kernel-zip.sha256
+          sha256sum "Redmi12C-BakaSU-CIP136-Delta-SUSFS.zip" | tee reports/kernel-zip.sha256
           sha256sum "kernel/$IMAGE" | tee reports/kernel-image.sha256
           echo "Built image: \`${IMAGE}\`" | tee -a reports/build-audit.md
           echo 'Build/package step completed. This ZIP has not been tested on a physical device.' | tee -a reports/build-audit.md
@@ -324,12 +360,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: redmi12c-bakasu-cip136-susfs-audit
+          name: redmi12c-bakasu-cip136-delta-susfs-audit
           if-no-files-found: warn
           retention-days: 14
           path: |
             reports/
-            Redmi12C-BakaSU-CIP136-SUSFS.zip
+            Redmi12C-BakaSU-CIP136-Delta-SUSFS.zip
             kernel/out/.config
             kernel/out/arch/arm64/boot/Image*
             kernel/.config
