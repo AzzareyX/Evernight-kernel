@@ -1,4 +1,4 @@
-name: Build Redmi 12C Kernel (ReSukiSU + SusFS + Inline Hook)
+name: Build Redmi 12C Kernel 4.19 (ReSukiSU + SusFS + Inline Hook)
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Install Dependencies
+      - name: Install Build Dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y \
             git ccache automake lzop bison gperf build-essential \
@@ -27,37 +27,47 @@ jobs:
           cd kernel
           curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
 
-      - name: Fetch and Apply SusFS & Inline Hook Patches
+      - name: Fetch and Apply SusFS & Inline Hook Patches (Kernel 4.19)
         run: |
           cd kernel
 
           # Kloning repositori patch milik JackA1ltman
           git clone --depth=1 https://github.com/JackA1ltman/NonGKI_Kernel_Build_2nd.git -b mainline patches_repo
 
-          # 1. Jalankan skrip inline hook dari repositori
+          # 1. Jalankan skrip inline hook
           if [ -f "patches_repo/Patches/Patch/inline_hook.sh" ]; then
             cp patches_repo/Patches/Patch/inline_hook.sh ./inline_hook.sh
             chmod +x inline_hook.sh
             ./inline_hook.sh
           fi
 
-          # 2. Terapkan SusFS patch
-          # Mengambil patch kernel versi 4.19 / 5.4 yang sesuai dari direktori Patches
-          for patch_file in patches_repo/Patches/*.patch patches_repo/Patches/Patch/*.patch; do
-            if [ -f "$patch_file" ]; then
-              echo "Applying patch: $patch_file"
-              git apply "$patch_file" || patch -p1 < "$patch_file" || true
-            fi
-          done
+          # 2. Terapkan SusFS patch khusus untuk Kernel 4.19
+          PATCH_419_DIR="patches_repo/Patches/4.19"
+          if [ -d "$PATCH_419_DIR" ]; then
+            for patch_file in "$PATCH_419_DIR"/*.patch; do
+              if [ -f "$patch_file" ]; then
+                echo "Applying 4.19 patch: $patch_file"
+                git apply "$patch_file" || patch -p1 < "$patch_file" || true
+              fi
+            done
+          else
+            echo "Direktori patch 4.19 tidak ditemukan, mencoba patch umum..."
+            for patch_file in patches_repo/Patches/*.patch; do
+              if [ -f "$patch_file" ]; then
+                echo "Applying patch: $patch_file"
+                git apply "$patch_file" || patch -p1 < "$patch_file" || true
+              fi
+            done
+          fi
 
-          # Bersihkan folder repositori patch temp
+          # Bersihkan file sementara
           rm -rf patches_repo inline_hook.sh
 
       - name: Setup Toolchain & Build Kernel
         run: |
           cd kernel
           
-          # Clone Toolchain AArch64 GCC 4.9
+          # Clone Toolchain AArch64 GCC 4.9 (Standar untuk Kernel 4.19 MediaTek)
           git clone --depth=1 https://github.com/chenxiaolong/Toolchain-AArch64-GNU aarch64-linux-android-4.9
           
           export ARCH=arm64
@@ -74,7 +84,7 @@ jobs:
       - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Redmi-12C-Kernel-ReSukiSU-SusFS
+          name: Redmi-12C-Kernel-4.19-ReSukiSU-SusFS
           path: |
             kernel/arch/arm64/boot/Image.gz-dtb
             kernel/arch/arm64/boot/dtbo.img
