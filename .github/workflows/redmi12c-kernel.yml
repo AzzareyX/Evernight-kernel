@@ -1,10 +1,10 @@
-name: Redmi 12C - CIP Ancestry and Patch Audit (Slow Network Fix)
+name: Redmi 12C - CIP Ancestry Audit (Deepen History)
 
 on:
   workflow_dispatch:
     inputs:
       kernel_branch:
-        description: 'Redmi 12C kernel branch'
+        description: 'Kernel source branch'
         required: true
         default: 'lineage-23.2'
         type: string
@@ -19,99 +19,128 @@ on:
         default: 'v4.19.325-cip136'
         type: string
       source_since:
-        description: 'Earliest committer date to scan (YYYY-MM-DD)'
+        description: 'Earliest source commit date (YYYY-MM-DD)'
         required: true
         default: '2026-04-01'
         type: string
-      source_commit_limit:
-        description: 'Maximum source commits to scan (start small to reduce transfer)'
+      max_deepen_rounds:
+        description: 'Maximum history deepening rounds'
         required: true
-        default: '500'
+        default: '6'
         type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: cip-audit-retry-${{ github.ref }}
+  group: cip-deepen-audit-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  ancestry-and-patch-audit:
+  audit:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
-      - name: Install audit tools and initialize reports
+      - name: Install tools and create reports
         shell: bash
         run: |
           set -Eeuo pipefail
-          mkdir -p reports
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends git python3 ca-certificates
-          git --version | tee reports/tool-versions.txt
-          python3 --version | tee -a reports/tool-versions.txt
+          mkdir -p reports
           {
-            echo '# Redmi 12C CIP ancestry and patch audit'
+            echo '# Redmi 12C CIP ancestry audit — deepen history'
             echo
-            echo '- Mode: read-only audit; no patches applied, no root integration, no kernel build or flashable ZIP.'
-            echo "- Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo '- Read-only audit only: no patches applied, no root setup, no kernel build.'
+            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             echo
           } > reports/audit.md
+          git --version > reports/tool-versions.txt
+          python3 --version >> reports/tool-versions.txt
 
-      - name: Clone limited kernel history with relaxed speed timeout and retries
-        id: source
+      - name: Clone shallow source with relaxed timeout and retries
         env:
           KERNEL_BRANCH: ${{ inputs.kernel_branch }}
-          SOURCE_COMMIT_LIMIT: ${{ inputs.source_commit_limit }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          # GitHub's HTTP/2 stream error can interrupt large filtered shallow clones.
-          # Prefer HTTP/1.1 and retry the operation; keep reports even on failure.
           git config --global http.version HTTP/1.1
-          # Do not enforce a low-speed cutoff: GitHub-hosted runners can have
-          # long pauses while negotiating filtered/shallow history.
           git config --global http.lowSpeedLimit 0
           git config --global http.lowSpeedTime 0
-          git config --global http.postBuffer 524288000
-          git config --global fetch.fsckObjects true
           URL="https://github.com/mt6768-dev/android_kernel_xiaomi_earth.git"
-          LIMIT="${SOURCE_COMMIT_LIMIT}"
-          [[ "$LIMIT" =~ ^[0-9]+$ ]] && (( LIMIT >= 100 && LIMIT <= 20000 )) || {
-            echo "Invalid source_commit_limit: $LIMIT (expected 100..20000)" | tee -a reports/audit.md
-            exit 2
-          }
-          attempt=1
-          max_attempts=3
-          until git clone --filter=blob:none --no-checkout --single-branch \
-              --branch "$KERNEL_BRANCH" --depth="$LIMIT" --no-tags "$URL" kernel; do
+          for attempt in 1 2 3; do
+            if git clone --filter=blob:none --no-checkout --single-branch \
+              --branch "$KERNEL_BRANCH" --depth=100 --no-tags "$URL" kernel; then
+              break
+            fi
             rc=$?
-            echo "Clone attempt ${attempt}/${max_attempts} failed (exit ${rc})." | tee -a reports/audit.md
             rm -rf kernel
-            if (( attempt >= max_attempts )); then
-              {
-                echo
-                echo '## Clone failure'
-                echo 'The remote clone failed after retries. No source history was audited.'
-                echo 'Likely causes include a transient GitHub transport failure or slow filtered-history transfer. Retry with a smaller source commit limit (for example 200) or run again later.'
-                echo 'Next retry uses a smaller source commit limit; no kernel changes were made.'
-              } | tee -a reports/audit.md
+            echo "Clone attempt $attempt failed (exit $rc)." | tee -a reports/audit.md
+            if [ "$attempt" -eq 3 ]; then
+              echo 'Clone failed after three attempts; audit incomplete.' | tee -a reports/audit.md
               exit "$rc"
             fi
             sleep $((attempt * 10))
-            attempt=$((attempt + 1))
           done
-          git -C kernel rev-parse HEAD | tee reports/source-head.txt
-          git -C kernel log -1 --format='source_subject=%s%nsource_commit_date=%cI%nsource_author_date=%aI' \
-            | tee reports/source-head-metadata.txt
           {
-            echo "- Source: mt6768-dev/android_kernel_xiaomi_earth@${KERNEL_BRANCH}"
-            echo "- Requested source commit limit: ${LIMIT}"
-            echo "- Source HEAD: $(git -C kernel rev-parse HEAD)"
-            echo
+            echo "- Source branch: \`${KERNEL_BRANCH}\`"
+            echo "- Initial HEAD: \`$(git -C kernel rev-parse HEAD)\`"
+            echo "- Initial commit count: $(git -C kernel rev-list --count HEAD)"
           } | tee -a reports/audit.md
 
-      - name: Fetch official CIP baseline and target with retries
+      - name: Deepen source history until date coverage or limit
+        env:
+          SOURCE_SINCE: ${{ inputs.source_since }}
+          MAX_ROUNDS: ${{ inputs.max_deepen_rounds }}
+          KERNEL_BRANCH: ${{ inputs.kernel_branch }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$MAX_ROUNDS" =~ ^[0-9]+$ ]] && (( MAX_ROUNDS >= 1 && MAX_ROUNDS <= 10 )) || {
+            echo 'max_deepen_rounds must be between 1 and 10.' | tee -a reports/audit.md
+            exit 2
+          }
+          : > reports/deepen-log.txt
+          for round in $(seq 1 "$MAX_ROUNDS"); do
+            count="$(git -C kernel log --since="$SOURCE_SINCE" --format=%H HEAD | wc -l | tr -d ' ')"
+            total="$(git -C kernel rev-list --count HEAD)"
+            shallow="$(test -f kernel/.git/shallow && echo yes || echo no)"
+            echo "round=$round total_commits=$total commits_since_date=$count shallow=$shallow" | tee -a reports/deepen-log.txt
+            # Need at least 100 commits in the requested date window before calling
+            # a patch-ID comparison useful; continue if history is still shallow.
+            if [ "$shallow" = no ]; then
+              echo "History is complete (not shallow)." | tee -a reports/audit.md
+              break
+            fi
+            if [ "$count" -ge 100 ]; then
+              echo "At least 100 commits found since requested date; continue deepening to reduce false negatives." | tee -a reports/audit.md
+            fi
+            deepen_by=$((1000 * round))
+            echo "Fetching --deepen=$deepen_by" | tee -a reports/deepen-log.txt
+            ok=0
+            for attempt in 1 2 3; do
+              if git -C kernel fetch --deepen="$deepen_by" --filter=blob:none --no-tags origin "$KERNEL_BRANCH"; then
+                ok=1
+                break
+              fi
+              echo "Deepen round $round attempt $attempt failed." | tee -a reports/deepen-log.txt
+              sleep $((attempt * 8))
+            done
+            if [ "$ok" -ne 1 ]; then
+              echo "Deepening failed in round $round; history coverage is incomplete." | tee -a reports/audit.md
+              break
+            fi
+          done
+          git -C kernel rev-list --count HEAD | tee reports/source-total-commits.txt
+          git -C kernel log --since="$SOURCE_SINCE" --format=%H HEAD | wc -l | tr -d ' ' | tee reports/source-commits-since-date.txt
+          if test -f kernel/.git/shallow; then
+            echo 'history_complete=false' | tee reports/history-status.txt
+            echo 'WARNING: source history is still shallow; any zero-match result is INCOMPLETE.' | tee -a reports/audit.md
+          else
+            echo 'history_complete=true' | tee reports/history-status.txt
+          fi
+
+      - name: Fetch official CIP tags
         id: cip
         env:
           CIP_BASE_REF: ${{ inputs.cip_base_ref }}
@@ -120,194 +149,109 @@ jobs:
         run: |
           set -Eeuo pipefail
           git -C kernel remote add cip https://kernel.googlesource.com/pub/scm/linux/kernel/git/cip/linux-cip
-          attempt=1
-          max_attempts=3
-          until git -C kernel fetch --filter=blob:none --no-tags cip \
-            "refs/tags/${CIP_BASE_REF}:refs/tags/${CIP_BASE_REF}" \
-            "refs/tags/${CIP_TARGET_REF}:refs/tags/${CIP_TARGET_REF}"; do
-            rc=$?
-            echo "CIP fetch attempt ${attempt}/${max_attempts} failed (exit ${rc})." | tee -a reports/audit.md
-            if (( attempt >= max_attempts )); then
-              echo "CIP refs could not be fetched after retries." | tee -a reports/audit.md
-              exit "$rc"
+          ok=0
+          for attempt in 1 2 3; do
+            if git -C kernel fetch --filter=blob:none --no-tags cip \
+              "refs/tags/${CIP_BASE_REF}:refs/tags/${CIP_BASE_REF}" \
+              "refs/tags/${CIP_TARGET_REF}:refs/tags/${CIP_TARGET_REF}"; then
+              ok=1
+              break
             fi
-            sleep $((attempt * 10))
-            attempt=$((attempt + 1))
+            echo "CIP fetch attempt $attempt failed." | tee -a reports/audit.md
+            sleep $((attempt * 8))
           done
+          [ "$ok" -eq 1 ] || { echo 'Could not fetch CIP refs.' | tee -a reports/audit.md; exit 1; }
           BASE_SHA="$(git -C kernel rev-parse "refs/tags/${CIP_BASE_REF}^{commit}")"
           TARGET_SHA="$(git -C kernel rev-parse "refs/tags/${CIP_TARGET_REF}^{commit}")"
-          printf '%s\n' "$BASE_SHA" > reports/cip-base-sha.txt
-          printf '%s\n' "$TARGET_SHA" > reports/cip-target-sha.txt
-          {
-            echo '## CIP refs'
-            echo
-            echo "- Baseline: \`${CIP_BASE_REF}\` → \`${BASE_SHA}\`"
-            echo "- Target: \`${CIP_TARGET_REF}\` → \`${TARGET_SHA}\`"
-          } | tee -a reports/audit.md
-          if ! git -C kernel merge-base --is-ancestor "$BASE_SHA" "$TARGET_SHA"; then
-            echo 'FAIL: baseline is not an ancestor of target; cannot compute release delta.' | tee -a reports/audit.md
-            echo 'cip_refs_ok=false' >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          git -C kernel rev-list "$BASE_SHA..$TARGET_SHA" > reports/cip-delta-commits.txt
+          echo "$BASE_SHA" > reports/cip-base-sha.txt
+          echo "$TARGET_SHA" > reports/cip-target-sha.txt
           git -C kernel rev-list --count "$BASE_SHA..$TARGET_SHA" | tee reports/cip-delta-count.txt
-          echo 'cip_refs_ok=true' >> "$GITHUB_OUTPUT"
+          git -C kernel rev-list --reverse "$BASE_SHA..$TARGET_SHA" > reports/cip-delta-commits.txt
+          echo "cip_refs_ok=true" >> "$GITHUB_OUTPUT"
 
-      - name: Compare ancestry and stable patch IDs
-        id: audit
+      - name: Compare ancestry and selected patch IDs
         if: steps.cip.outputs.cip_refs_ok == 'true'
         env:
           CIP_BASE_REF: ${{ inputs.cip_base_ref }}
           CIP_TARGET_REF: ${{ inputs.cip_target_ref }}
-          KERNEL_BRANCH: ${{ inputs.kernel_branch }}
           SOURCE_SINCE: ${{ inputs.source_since }}
-          SOURCE_COMMIT_LIMIT: ${{ inputs.source_commit_limit }}
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
           import json, os, pathlib, subprocess
           from collections import defaultdict
-
-          reports = pathlib.Path('reports')
-          repo = pathlib.Path('kernel')
+          root = pathlib.Path('kernel')
+          outdir = pathlib.Path('reports')
           since = os.environ['SOURCE_SINCE']
           until = '2026-10-20'
-          limit = int(os.environ['SOURCE_COMMIT_LIMIT'])
-          base_ref = os.environ['CIP_BASE_REF']
-          target_ref = os.environ['CIP_TARGET_REF']
-
+          base_ref, target_ref = os.environ['CIP_BASE_REF'], os.environ['CIP_TARGET_REF']
           def git(*args, check=True):
-              p = subprocess.run(['git', '-C', str(repo), *args], text=True,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+              p = subprocess.run(['git','-C',str(root),*args],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
               if check and p.returncode:
-                  raise RuntimeError(f"git {' '.join(args)} failed: {p.stderr[-2500:]}")
+                  raise RuntimeError(f"git {' '.join(args)}: {p.stderr[-2000:]}")
               return p
+          head = git('rev-parse','HEAD').stdout.strip()
+          base = git('rev-parse',f'refs/tags/{base_ref}^{{commit}}').stdout.strip()
+          target = git('rev-parse',f'refs/tags/{target_ref}^{{commit}}').stdout.strip()
+          ancestor = git('merge-base','--is-ancestor',base,'HEAD',check=False).returncode == 0
+          mb = git('merge-base',base,'HEAD',check=False).stdout.strip() or None
+          cip_shas = git('rev-list','--no-merges',f'{base}..{target}').stdout.splitlines()
+          source_shas = git('log','--no-merges',f'--since={since}',f'--until={until}','--format=%H','HEAD').stdout.splitlines()
+          def patch_id(sha):
+              p = git('show','--format=','--no-ext-diff','--binary','--no-renames',sha,check=False)
+              if p.returncode or not p.stdout.strip(): return None
+              q = subprocess.run(['git','patch-id','--stable'],input=p.stdout,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+              toks = q.stdout.split()
+              return toks[0] if toks else None
+          source_ids = defaultdict(list)
+          for i, sha in enumerate(source_shas,1):
+              pid = patch_id(sha)
+              if pid: source_ids[pid].append(sha)
+              if i % 250 == 0: print(f'Source patch IDs: {i}/{len(source_shas)}',flush=True)
+          rows=[]
+          matched=0
+          for i, sha in enumerate(cip_shas,1):
+              pid=patch_id(sha)
+              subject=git('show','-s','--format=%s',sha).stdout.strip()
+              hits=source_ids.get(pid,[]) if pid else []
+              status='exact-match' if hits else ('empty-or-no-patch-id' if not pid else 'no-exact-match')
+              matched += bool(hits)
+              rows.append({'cip_sha':sha,'subject':subject,'patch_id':pid,'status':status,'source_matches':hits})
+              if i % 200 == 0: print(f'CIP patch IDs: {i}/{len(cip_shas)}',flush=True)
+          shallow=(root/'.git'/'shallow').exists()
+          scanned=len(source_shas)
+          complete=not shallow
+          data={'source_head':head,'source_shallow':shallow,'source_commits_since_date_scanned':scanned,
+                'cip_baseline':{'ref':base_ref,'sha':base},'cip_target':{'ref':target_ref,'sha':target},
+                'cip_baseline_exact_sha_is_ancestor':ancestor,'merge_base':mb,
+                'cip_nonmerge_commits_compared':len(cip_shas),'exact_patch_id_matches':matched,
+                'audit_status':'COMPLETE' if complete else 'INCOMPLETE_HISTORY_STILL_SHALLOW',
+                'warning':'No patch-ID match is not proof of absence; patch-ID matching detects exact stable diffs only.'}
+          (outdir/'audit.json').write_text(json.dumps({'summary':data,'patches':rows},indent=2)+'\n')
+          with (outdir/'patch-matches.csv').open('w') as f:
+              f.write('status,cip_sha,patch_id,subject,source_matches\n')
+              for r in rows:
+                  subj=r['subject'].replace('"','""')
+                  f.write(f'{r["status"]},{r["cip_sha"]},{r["patch_id"] or ""},"{subj}","{";".join(r["source_matches"])}"\n')
+          with (outdir/'audit.md').open('a') as f:
+              f.write('\n## Audit summary\n\n')
+              f.write(f'- Status: **{data["audit_status"]}**\n- Source HEAD: `{head}`\n')
+              f.write(f'- Source commits in requested date window scanned: {scanned}\n')
+              f.write(f'- Source history still shallow: {shallow}\n')
+              f.write(f'- Exact CIP baseline SHA is ancestor of source HEAD: {ancestor}\n')
+              f.write(f'- Merge base: `{mb or "not found"}`\n')
+              f.write(f'- CIP non-merge commits compared: {len(cip_shas)}\n')
+              f.write(f'- Exact patch-ID matches: {matched}\n')
+              f.write('\nA zero-match result is not conclusive unless source history coverage is complete; modified/backported patches may have different patch IDs.\n')
+          print(json.dumps(data,indent=2))
+          PY
 
-          head = git('rev-parse', 'HEAD').stdout.strip()
-          base = git('rev-parse', f'refs/tags/{base_ref}^{{commit}}').stdout.strip()
-          target = git('rev-parse', f'refs/tags/{target_ref}^{{commit}}').stdout.strip()
-          exact_ancestor = git('merge-base', '--is-ancestor', base, 'HEAD', check=False).returncode == 0
-          merge_base = git('merge-base', base, 'HEAD', check=False).stdout.strip() or 'not found in fetched history'
-          cip_commits = git('rev-list', '--reverse', f'{base}..{target}').stdout.splitlines()
-          cip_rows, cip_ids = [], defaultdict(list)
-          for sha in cip_commits:
-              parents = git('rev-list', '--parents', '-n', '1', sha).stdout.split()
-              subject = git('show', '-s', '--format=%s', sha).stdout.strip()
-              if len(parents) > 2:
-                  cip_rows.append({'sha': sha, 'subject': subject, 'kind': 'merge', 'patch_id': None})
-                  continue
-              patch = git('show', '--format=', '--no-ext-diff', '--binary', '--no-renames', sha, check=False)
-              if patch.returncode or not patch.stdout.strip():
-                  cip_rows.append({'sha': sha, 'subject': subject, 'kind': 'empty-or-unavailable-diff', 'patch_id': None})
-                  continue
-              out = subprocess.run(['git', 'patch-id', '--stable'], input=patch.stdout, text=True,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-              tokens = out.stdout.split()
-              pid = tokens[0] if tokens else None
-              if pid:
-                  cip_ids[pid].append(sha)
-              cip_rows.append({'sha': sha, 'subject': subject, 'kind': 'commit', 'patch_id': pid})
-
-          src_shas = git('log', '--no-merges', f'--since={since}', f'--until={until}',
-                         f'-n{limit}', '--format=%H', 'HEAD').stdout.splitlines()
-          source_patch_matches = defaultdict(list)
-          for idx, sha in enumerate(src_shas, 1):
-              patch = git('show', '--format=', '--no-ext-diff', '--binary', '--no-renames', sha, check=False)
-              if patch.returncode or not patch.stdout.strip():
-                  continue
-              out = subprocess.run(['git', 'patch-id', '--stable'], input=patch.stdout, text=True,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-              tokens = out.stdout.split()
-              if tokens:
-                  source_patch_matches[tokens[0]].append(sha)
-              if idx % 250 == 0:
-                  print(f'Processed {idx}/{len(src_shas)} source commits', flush=True)
-
-          matched, unmatched, merge_or_empty = [], [], []
-          for row in cip_rows:
-              pid = row['patch_id']
-              if not pid:
-                  merge_or_empty.append(row)
-              elif pid in source_patch_matches:
-                  row['source_match_commits'] = source_patch_matches[pid]
-                  matched.append(row)
-              else:
-                  unmatched.append(row)
-
-          shallow = (repo / '.git' / 'shallow').exists()
-          result = {
-            'source_repo': 'mt6768-dev/android_kernel_xiaomi_earth',
-            'source_branch': os.environ['KERNEL_BRANCH'],
-            'source_head': head,
-            'source_shallow_clone': shallow,
-            'source_history_window': {'since_committer_date': since, 'until_committer_date_exclusive': until,
-                                      'max_non_merge_commits': limit, 'commits_scanned': len(src_shas)},
-            'cip_baseline': {'ref': base_ref, 'sha': base},
-            'cip_target': {'ref': target_ref, 'sha': target},
-            'cip_baseline_exact_sha_is_ancestor_of_source_head': exact_ancestor,
-            'source_cip_merge_base': merge_base,
-            'cip_delta_commit_count_including_merges': len(cip_commits),
-            'cip_nonmerge_patch_count': sum(bool(x['patch_id']) for x in cip_rows),
-            'cip_patch_ids_exactly_matched_in_source_window': len(matched),
-            'cip_patch_ids_not_found_in_source_window': len(unmatched),
-            'cip_merges_empty_or_unavailable_diffs': len(merge_or_empty),
-            'matched': matched, 'unmatched': unmatched, 'merge_or_empty': merge_or_empty,
-            'interpretation': 'Patch-ID matches are evidence of equivalent diffs in the scanned source window, not proof the final tree retains them. No match does not prove absence. Audit only; no patch applied and no build performed.'
-          }
-          (reports / 'cip-patch-audit.json').write_text(json.dumps(result, indent=2) + '\n')
-          with (reports / 'cip-patch-audit.csv').open('w') as f:
-              f.write('status,cip_sha,patch_id,subject,source_match_commits\n')
-              for row in cip_rows:
-                  status = 'merge-or-empty' if not row.get('patch_id') else ('exact-match' if row['patch_id'] in source_patch_matches else 'no-exact-match')
-                  subject = row['subject'].replace('"', '""')
-                  matches = ';'.join(source_patch_matches.get(row.get('patch_id'), []))
-                  f.write(f'{status},{row["sha"]},{row.get("patch_id") or ""},"{subject}","{matches}"\n')
-          with (reports / 'audit.md').open('a') as f:
-              f.write('\n## Ancestry result\n\n')
-              f.write(f'- Source HEAD: `{head}`\n- Exact CIP baseline SHA ancestor of source HEAD: **{exact_ancestor}**\n')
-              f.write(f'- Source/CIP merge-base: `{merge_base}`\n- Source clone shallow: **{shallow}**\n')
-              f.write('\nA false exact-ancestor result does not prove the source lacks equivalent CIP changes.\n')
-              f.write('\n## Stable patch-ID comparison\n\n')
-              f.write(f'- CIP delta commits including merges: {len(cip_commits)}\n')
-              f.write(f'- CIP non-merge commits with patch IDs: {result["cip_nonmerge_patch_count"]}\n')
-              f.write(f'- Exact patch-ID matches: {len(matched)}\n- No exact match in scanned window: {len(unmatched)}\n')
-              f.write(f'- Merge/empty/unavailable diffs: {len(merge_or_empty)}\n- Source commits scanned: {len(src_shas)}\n')
-              f.write('\n### Exact matches\n\n')
-              for row in matched:
-                  f.write(f'- CIP `{row["sha"][:12]}` ↔ source `{", ".join(x[:12] for x in row["source_match_commits"])}` — {row["subject"]}\n')
-              if not matched:
-                  f.write('- None found in the scanned window.\n')
-              f.write('\n### No exact match (not proof of absence)\n\n')
-              for row in unmatched[:200]:
-                  f.write(f'- `{row["sha"][:12]}` — {row["subject"]}\n')
-              f.write('\n## Safety\n\nAudit only. No CIP commits applied, no BakaSU/SUSFS scripts run, no kernel build or flashable ZIP produced.\n')
-          print(f'Audit complete: {len(matched)} exact matches; {len(unmatched)} unmatched; {len(merge_or_empty)} merge/empty.')
-
-      - name: Write failure diagnostics
-        if: failure()
-        shell: bash
-        run: |
-          set +e
-          mkdir -p reports
-          {
-            echo
-            echo '## Workflow failure diagnostics'
-            echo
-            echo "Failed step: check the Actions log for the first red step."
-            echo 'If clone failed, this is a transport/history-fetch failure and not a CIP patch result.'
-            echo 'No kernel build or flashable ZIP is produced by this workflow.'
-          } >> reports/audit.md
-          {
-            echo "workflow_run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-            echo "job_status=failure"
-          } > reports/failure-diagnostics.txt
-
-      - name: Upload audit reports
+      - name: Upload audit reports even on failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: redmi12c-cip-ancestry-patch-audit-slow-network-fix
+          name: redmi12c-cip-ancestry-patch-audit-deepen
           path: reports/
           if-no-files-found: warn
           retention-days: 30
