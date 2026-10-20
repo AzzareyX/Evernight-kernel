@@ -14,15 +14,15 @@ env:
   KERNEL_SOURCE : "https://github.com/mt6768-dev/android_kernel_xiaomi_earth.git"
   KERNEL_BRANCH : "lineage-23.2"
 
-  # Let builder auto-fetch stable matching Clang version
   CLANG_SOURCE : ""
   CLANG_BRANCH : ""
 
+  # Disable external GCC sources to prevent missing path error
   GCC_GNU : false
-  GCC_64_SOURCE : "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9.git"
-  GCC_64_BRANCH : "android12L-release"
-  GCC_32_SOURCE : "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/x86/x86_64-linux-android-4.9.git"
-  GCC_32_BRANCH : "android12L-release"
+  GCC_64_SOURCE : ""
+  GCC_64_BRANCH : ""
+  GCC_32_SOURCE : ""
+  GCC_32_BRANCH : ""
 
   DEFCONFIG_SOURCE: ""
   DEFCONFIG_NAME : "mtk_earth_defconfig"
