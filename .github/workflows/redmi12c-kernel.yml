@@ -1,6 +1,7 @@
-name: Build Xiaomi Redmi 12C (Lineage 23.2 - Kernel 4.19)
+name: Build Xiaomi Redmi 12C (LineageOS / AOSP)
 
 on:
+  workflow_call:
   workflow_dispatch:
 
 env:
@@ -11,28 +12,28 @@ env:
   CUSTOM_CMDS : "CLANG_TRIPLE=aarch64-linux-gnu-"
   EXTRA_CMDS : "LD=ld.lld LLVM=1 LLVM_IAS=1"
 
-  KERNEL_SOURCE : "https://github.com/mt6768-dev/android_kernel_xiaomi_earth.git"
+  KERNEL_SOURCE : "https://github.com/LineageOS/android_kernel_xiaomi_earth.git"
   KERNEL_BRANCH : "lineage-23.2"
 
-  CLANG_SOURCE : ""
+  CLANG_SOURCE : "https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/LLVM-19.1.7-Linux-X64.tar.xz"
   CLANG_BRANCH : ""
 
   GCC_GNU : false
-  GCC_64_SOURCE : ""
-  GCC_64_BRANCH : ""
-  GCC_32_SOURCE : ""
-  GCC_32_BRANCH : ""
+  GCC_64_SOURCE : "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9.git"
+  GCC_64_BRANCH : "android12L-release"
+  GCC_32_SOURCE : "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9.git"
+  GCC_32_BRANCH : "android12L-release"
 
   DEFCONFIG_SOURCE: ""
-  DEFCONFIG_NAME : "mtk_earth_defconfig"
+  DEFCONFIG_NAME : "earth_defconfig"
   DEFCONFIG_ORIGIN_IMAGE: ""
   DEFCONFIG_FROM_BOOT: false
 
   KERNELSU_SOURCE : ""
   KERNELSU_BRANCH : ""
 
-  KERNELSU_AUTO_GET : "true"
-  KERNELSU_AUTO_FORK : "bakasu" # ReSukiSU / Bakasu
+  KERNELSU_AUTO_GET : "true" # Mengaktifkan integrasi KernelSU secara otomatis
+  KERNELSU_AUTO_FORK : "bakasu" # Opsi: xxksu, rsuntk, next, bakasu, sukisu
 
   SUSFS_ENABLE : true
   SUSFS_FIXED : true
@@ -53,19 +54,19 @@ env:
   PACK_METHOD: "AnyKernel3"
   PACK_KMODULES: "false"
 
-  KERNELSU_METHOD: "shell"
+  KERNELSU_METHOD: "shell" # Menggunakan skrip pemutus/patcher shell
 
   PATCHES_SOURCE: "JackA1ltman/NonGKI_Kernel_Patches"
-  PATCHES_BRANCH: "mi_kernel"
+  PATCHES_BRANCH: "main"
 
-  SUSFS_FOLDER_FIXED: "redmi_note_7_aosp_a15_419"
-  SUSFS_PATCH_FIXED: ""
+  SUSFS_FOLDER_FIXED: "" # Isikan nama folder patch khusus jika ada di repo patches
+  SUSFS_PATCH_FIXED: ""  # Isikan file patch spesifik jika diperlukan
 
   REKERNEL_ENABLE: "false"
   DROIDSPACES_ENABLE: "false"
   NOMOUNT_ENABLE: "false"
 
-  HOOK_METHOD: "syscall"
+  HOOK_METHOD: "inline" # Menggunakan inline hook sesuai kebutuhan BakaSU / SukiSU pada Non-GKI
 
   KPM_ENABLE: "false"
   KPM_INLINE: "false"
@@ -75,9 +76,8 @@ env:
   BASEBAND_GUARD_ENABLE: "false"
   BASEBAND_GUARD_BOOT: "false"
 
-  # Enabled to generate separate DTB file matching standard kernel builds
-  GENERATE_DTB: "true"
-  GENERATE_CHIP: "mediatek"
+  GENERATE_DTB: "true" # MediaTek umumnya memerlukan DTB/DTBO terpisah
+  GENERATE_CHIP: "mediatek" # Disesuaikan untuk SoC MediaTek Redmi 12C
 
   BUILD_DEBUGGER: "false"
   SKIP_PATCH: "true"
@@ -85,11 +85,11 @@ env:
   BUILD_OTHER_CONFIG: "false"
   MERGE_CONFIG_FILES: ""
 
-  FREE_MORE_SPACE: "false"
+  FREE_MORE_SPACE: "true"
 
 jobs:
   build-kernel:
-    name: Build Redmi 12C Kernel (Earth)
+    name: Xiaomi Redmi 12C (earth)
     runs-on: ubuntu-24.04
     env:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
@@ -97,11 +97,8 @@ jobs:
       CCACHE_HARDLINK: "true"
 
     steps:
-      - name: ⏰ Clone Build Runner Repository
-        uses: actions/checkout@v4
-        with:
-          repository: JackA1ltman/NonGKI_Kernel_Build_2nd
-          ref: mainline
+      - name: ⏰ Checkout repository
+        uses: actions/checkout@v6
 
       - name: ⌛️ Compilation environment preparation
         uses: ./.github/workflows/build-env
@@ -118,18 +115,15 @@ jobs:
       - name: 🪛 Extra Kernel Options
         run: |
           cd $GITHUB_WORKSPACE/device_kernel
+
+          # Konfigurasi Tambahan untuk KernelSU / Inline Hook pada Redmi 12C
+          echo "CONFIG_KSU=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           echo "CONFIG_KSU_SUSFS=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
-          echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
-          
-          # Fix VDSO32 & COMPAT build errors
-          echo "CONFIG_VDSO32=n" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
-          echo "# CONFIG_VDSO32 is not set" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
-          echo "CONFIG_COMPAT_VDSO=n" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
-          echo "# CONFIG_COMPAT_VDSO is not set" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
-          echo "CONFIG_COMPAT=n" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
-          echo "# CONFIG_COMPAT=n" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_KSU_SUSFS_SUS_SU=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
 
       - name: 🧰 Patch Kernel of Re:Kernel
         uses: ./.github/workflows/patch-rekernel
