@@ -14,8 +14,8 @@ env:
   KERNEL_SOURCE : "https://github.com/mt6768-dev/android_kernel_xiaomi_earth.git"
   KERNEL_BRANCH : "lineage-23.2"
 
-  # Downgraded to Clang 17 to fix kernel 4.19 strict type-checking / RCU errors
-  CLANG_SOURCE : "https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.6/Clang-17.0.6-x86_64-linux-gnu.tar.xz"
+  # Let builder auto-fetch stable matching Clang version
+  CLANG_SOURCE : ""
   CLANG_BRANCH : ""
 
   GCC_GNU : false
