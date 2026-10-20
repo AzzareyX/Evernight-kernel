@@ -17,7 +17,6 @@ env:
   CLANG_SOURCE : ""
   CLANG_BRANCH : ""
 
-  # Disable external GCC sources to prevent missing path error
   GCC_GNU : false
   GCC_64_SOURCE : ""
   GCC_64_BRANCH : ""
@@ -76,7 +75,8 @@ env:
   BASEBAND_GUARD_ENABLE: "false"
   BASEBAND_GUARD_BOOT: "false"
 
-  GENERATE_DTB: "false"
+  # Enabled to generate separate DTB file matching standard kernel builds
+  GENERATE_DTB: "true"
   GENERATE_CHIP: "mediatek"
 
   BUILD_DEBUGGER: "false"
@@ -129,7 +129,7 @@ jobs:
           echo "CONFIG_COMPAT_VDSO=n" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           echo "# CONFIG_COMPAT_VDSO is not set" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           echo "CONFIG_COMPAT=n" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
-          echo "# CONFIG_COMPAT is not set" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "# CONFIG_COMPAT=n" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
 
       - name: 🧰 Patch Kernel of Re:Kernel
         uses: ./.github/workflows/patch-rekernel
