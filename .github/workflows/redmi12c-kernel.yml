@@ -14,7 +14,8 @@ env:
   KERNEL_SOURCE : "https://github.com/mt6768-dev/android_kernel_xiaomi_earth.git"
   KERNEL_BRANCH : "lineage-23.2"
 
-  CLANG_SOURCE : "https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/LLVM-19.1.7-Linux-X64.tar.xz"
+  # Downgraded to Clang 17 to fix kernel 4.19 strict type-checking / RCU errors
+  CLANG_SOURCE : "https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.6/Clang-17.0.6-x86_64-linux-gnu.tar.xz"
   CLANG_BRANCH : ""
 
   GCC_GNU : false
@@ -122,7 +123,7 @@ jobs:
           echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           
-          # Fix VDSO32 & COMPAT build errors on modern Clang
+          # Fix VDSO32 & COMPAT build errors
           echo "CONFIG_VDSO32=n" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           echo "# CONFIG_VDSO32 is not set" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           echo "CONFIG_COMPAT_VDSO=n" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
