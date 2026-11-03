@@ -1,0 +1,103 @@
+name: Build BakaSU Kernel (earth)
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_ref:
+        description: "LineageOS kernel branch/tag"
+        required: true
+        default: "lineage-23.2"
+      bakasu_ref:
+        description: "BakaSU branch/tag/commit"
+        required: true
+        default: "main"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    env:
+      ARCH: arm64
+      SUBARCH: arm64
+      KBUILD_BUILD_USER: bakasu
+      KBUILD_BUILD_HOST: github-actions
+
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@v4
+
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+        with:
+          repository: LineageOS/android_kernel_xiaomi_earth
+          ref: ${{ github.event.inputs.kernel_ref || 'lineage-23.2' }}
+          path: kernel
+          fetch-depth: 1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang-17 lld-17 llvm-17 gcc-aarch64-linux-gnu \
+            bc flex bison make libssl-dev libelf-dev libyaml-dev \
+            device-tree-compiler zip unzip python3 git curl
+
+      - name: Integrate BakaSU
+        working-directory: kernel
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh" \
+            | bash -s "${{ github.event.inputs.bakasu_ref || 'main' }}"
+          git apply ../patches/bakasu-earth-4.19.patch
+
+      - name: Build kernel
+        working-directory: kernel
+        run: |
+          export PATH="/usr/lib/llvm-17/bin:$PATH"
+
+          make O=out ARCH=arm64 earth_defconfig
+
+          make -j"$(nproc)" O=out ARCH=arm64 \
+            LLVM=1 LLVM_IAS=1 \
+            CC=clang \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            READELF=llvm-readelf \
+            STRIP=llvm-strip \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            Image.gz-dtb
+
+      - name: Package AnyKernel3 zip
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          cp anykernel/anykernel.sh AnyKernel3/anykernel.sh
+
+          cd AnyKernel3
+          zip -r9 "../BakaSU-Earth-${GITHUB_RUN_NUMBER}.zip" . \
+            -x '*.git*' 'README.md'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BakaSU-Earth-${{ github.run_number }}
+          path: BakaSU-Earth-${{ github.run_number }}.zip
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: BakaSU Earth ${{ github.ref_name }}
+          files: BakaSU-Earth-${{ github.run_number }}.zip
+          generate_release_notes: true
