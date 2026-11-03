@@ -1,4 +1,4 @@
-name: Build BakaSU Kernel (earth)
+name: Build BakaSU + SUSFS Kernel (earth)
 
 on:
   workflow_dispatch:
@@ -8,9 +8,9 @@ on:
         required: true
         default: "lineage-23.2"
       bakasu_ref:
-        description: "BakaSU branch/tag/commit"
+        description: "BakaSU branch/tag/commit (pinned for this patch set)"
         required: true
-        default: "main"
+        default: "516d3e87fbc986ccefdde2c2765f1700612441a9"
   push:
     tags:
       - "v*"
@@ -21,13 +21,14 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 240
 
     env:
       ARCH: arm64
       SUBARCH: arm64
       KBUILD_BUILD_USER: bakasu
       KBUILD_BUILD_HOST: github-actions
+      MAKE_ARGS: "O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf STRIP=llvm-strip CROSS_COMPILE=aarch64-linux-gnu-"
 
     steps:
       - name: Checkout build repo
@@ -47,34 +48,49 @@ jobs:
           sudo apt-get install -y \
             clang-17 lld-17 llvm-17 gcc-aarch64-linux-gnu \
             bc flex bison make libssl-dev libelf-dev libyaml-dev \
-            device-tree-compiler zip unzip python3 git curl
+            device-tree-compiler zip unzip python3 git curl cpio
 
-      - name: Integrate BakaSU
+      - name: Integrate BakaSU + SUSFS
         working-directory: kernel
         run: |
-          curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh" \
-            | bash -s "${{ github.event.inputs.bakasu_ref || 'main' }}"
-          git apply ../patches/bakasu-earth-4.19.patch
+          # BakaSU setup: clone driver, symlink drivers/kernelsu, update
+          # drivers/Makefile and drivers/Kconfig.
+          curl -fLSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/${{ github.event.inputs.bakasu_ref || '516d3e87fbc986ccefdde2c2765f1700612441a9' }}/kernel/setup.sh" \
+            | bash -s "${{ github.event.inputs.bakasu_ref || '516d3e87fbc986ccefdde2c2765f1700612441a9' }}"
+
+          # SUSFS v2.3.0 core backport for Linux 4.19, plus the SUSFS
+          # inline-hook integration required by BakaSU, plus earth_defconfig.
+          git apply --whitespace=nowarn ../patches/bakasu-susfs-earth-4.19.patch
+
+      - name: Configure kernel
+        working-directory: kernel
+        run: |
+          export PATH="/usr/lib/llvm-17/bin:$PATH"
+          make $MAKE_ARGS earth_defconfig
+
+          # Fail early if the BakaSU/SUSFS Kconfig settings were not picked up.
+          grep -q '^CONFIG_KSU=y$' out/.config
+          grep -q '^CONFIG_KSU_SUSFS=y$' out/.config
+          grep -q '^CONFIG_KSU_SUSFS_SUS_PATH=y$' out/.config
+          grep -q '^CONFIG_KSU_SUSFS_SUS_MOUNT=y$' out/.config
+          grep -q '^CONFIG_KSU_SUSFS_SUS_KSTAT=y$' out/.config
+          grep -q '^CONFIG_KSU_SUSFS_SUS_MAP=y$' out/.config
+          grep -q '^CONFIG_KALLSYMS_ALL=y$' out/.config
+
+          echo "BakaSU + SUSFS configuration:"
+          grep -E '^(CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_KALLSYMS_ALL|CONFIG_THREAD_INFO_IN_TASK)' out/.config | sort
 
       - name: Build kernel
         working-directory: kernel
         run: |
           export PATH="/usr/lib/llvm-17/bin:$PATH"
 
-          make O=out ARCH=arm64 earth_defconfig
+          # Some LineageOS trees ship a prebuilt tools/build/cpio for the
+          # builder's architecture. Use the host cpio from apt instead.
+          cp /usr/bin/cpio tools/build/cpio
+          chmod +x tools/build/cpio
 
-          make -j"$(nproc)" O=out ARCH=arm64 \
-            LLVM=1 LLVM_IAS=1 \
-            CC=clang \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            READELF=llvm-readelf \
-            STRIP=llvm-strip \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            Image.gz-dtb
+          make -j"$(nproc)" $MAKE_ARGS Image.gz-dtb
 
       - name: Package AnyKernel3 zip
         run: |
@@ -83,14 +99,14 @@ jobs:
           cp anykernel/anykernel.sh AnyKernel3/anykernel.sh
 
           cd AnyKernel3
-          zip -r9 "../BakaSU-Earth-${GITHUB_RUN_NUMBER}.zip" . \
+          zip -r9 "../BakaSU-SUSFS-Earth-${GITHUB_RUN_NUMBER}.zip" . \
             -x '*.git*' 'README.md'
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BakaSU-Earth-${{ github.run_number }}
-          path: BakaSU-Earth-${{ github.run_number }}.zip
+          name: BakaSU-SUSFS-Earth-${{ github.run_number }}
+          path: BakaSU-SUSFS-Earth-${{ github.run_number }}.zip
           if-no-files-found: error
 
       - name: Publish release
@@ -98,6 +114,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: BakaSU Earth ${{ github.ref_name }}
-          files: BakaSU-Earth-${{ github.run_number }}.zip
+          name: BakaSU + SUSFS Earth ${{ github.ref_name }}
+          files: BakaSU-SUSFS-Earth-${{ github.run_number }}.zip
           generate_release_notes: true
