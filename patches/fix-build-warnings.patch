@@ -1,0 +1,846 @@
+diff --git a/arch/arm64/Kconfig.platforms b/arch/arm64/Kconfig.platforms
+index 56ebb2862..d4fe62637 100644
+--- a/arch/arm64/Kconfig.platforms
++++ b/arch/arm64/Kconfig.platforms
+@@ -320,6 +320,7 @@ config MACH_MT6768
+ 	select CRYPTO_SHA2_ARM64_CE
+ 	select CRYPTO_AES_ARM64_CE_BLK
+ 	select MTK_SYSTRACKER_V2
++	select MTK_SDA
+ 	select MTK_CACHE_PARITY_CHECK
+ 	select MTK_LASTBUS_INTERFACE
+ 	select MTK_DFD_INTERNAL_DUMP
+diff --git a/arch/arm64/boot/dts/mediatek/cust_mt6768_camera.dtsi b/arch/arm64/boot/dts/mediatek/cust_mt6768_camera.dtsi
+index d947cb76d..e7da2f35a 100644
+--- a/arch/arm64/boot/dts/mediatek/cust_mt6768_camera.dtsi
++++ b/arch/arm64/boot/dts/mediatek/cust_mt6768_camera.dtsi
+@@ -170,6 +170,8 @@
+ };
+ /* code at 2022/07/25 start */
+ &i2c2 {
++	#address-cells = <1>;
++	#size-cells = <0>;
+ 	mtk_camera_eeprom0:camera_eeprom0@50 {
+ 		compatible = "mediatek,camera_eeprom";
+ 		reg = <0x50>;
+@@ -237,6 +239,8 @@
+ 
+ /* code at 2022/07/29 start */
+ &i2c2 {
++	#address-cells = <1>;
++	#size-cells = <0>;
+         gc6133c_yuv@40 {
+         compatible = "gc,gc6133c_yuv";
+         reg = <0x40>;
+@@ -263,6 +267,8 @@
+ 	};
+ };
+ &i2c4 {
++	#address-cells = <1>;
++	#size-cells = <0>;
+         gc6133c_yuv_i2c4@40 {
+         compatible = "gc,gc6133c_yuv_i2c4";
+         reg = <0x40>;
+diff --git a/arch/arm64/boot/dts/mediatek/cust_mt6768_touch_720x1650.dtsi b/arch/arm64/boot/dts/mediatek/cust_mt6768_touch_720x1650.dtsi
+index 09c1f651e..ec9462d63 100644
+--- a/arch/arm64/boot/dts/mediatek/cust_mt6768_touch_720x1650.dtsi
++++ b/arch/arm64/boot/dts/mediatek/cust_mt6768_touch_720x1650.dtsi
+@@ -18,6 +18,8 @@
+ 
+ 
+ &spi0 {
++	#address-cells = <1>;
++	#size-cells = <0>;
+ 	status = "ok";
+ /*
+ 	focaltech@1 {
+diff --git a/arch/arm64/boot/dts/mediatek/earth.dts b/arch/arm64/boot/dts/mediatek/earth.dts
+index adce4f54c..f933c5207 100644
+--- a/arch/arm64/boot/dts/mediatek/earth.dts
++++ b/arch/arm64/boot/dts/mediatek/earth.dts
+@@ -89,6 +89,8 @@
+ };
+ 
+ &i2c2 {
++	#address-cells = <1>;
++	#size-cells = <0>;
+ 	clock-frequency = <400000>;
+ 
+ 	mtk-usb@60 {
+@@ -100,6 +102,8 @@
+ 
+ /* C3T code for HQ-218913 by zoujiarong at 2022.7.20 start */
+ &i2c3 {
++	#address-cells = <1>;
++	#size-cells = <0>;
+     nxp@28 {
+         compatible = "nq-nci";
+         reg = <0x28>;
+@@ -295,6 +299,8 @@
+ /*C3T code for HQ-226117 by jiangyue at 2022/07/28 end*/
+ 
+ &i2c0{
++	#address-cells = <1>;
++	#size-cells = <0>;
+ 
+ 	lcd_bias@3e {
+ 		compatible = "mediatek,lcd_bias";
+diff --git a/arch/arm64/boot/dts/mediatek/earth/cust.dtsi b/arch/arm64/boot/dts/mediatek/earth/cust.dtsi
+index c6c0d0a9c..4ab06ef1e 100644
+--- a/arch/arm64/boot/dts/mediatek/earth/cust.dtsi
++++ b/arch/arm64/boot/dts/mediatek/earth/cust.dtsi
+@@ -464,6 +464,7 @@
+ 
+ &md1_sim1_hot_plug_eint {
+ 	compatible = "mediatek,md1_sim1_hot_plug_eint-eint";
++	interrupt-parent = <&sysirq>;
+ 	interrupts = <0 8>;
+ 	debounce = <0 10000>;
+ 	dedicated = <0 0>;
+@@ -474,6 +475,7 @@
+ 
+ &md1_sim2_hot_plug_eint {
+ 	compatible = "mediatek,md1_sim2_hot_plug_eint-eint";
++	interrupt-parent = <&sysirq>;
+ 	interrupts = <1 8>;
+ 	debounce = <1 10000>;
+ 	dedicated = <1 0>;
+diff --git a/arch/arm64/boot/dts/mediatek/mt6768.dts b/arch/arm64/boot/dts/mediatek/mt6768.dts
+index adf7d34ff..e8f62ebad 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6768.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6768.dts
+@@ -653,7 +653,7 @@ page_owner=on loop.max_part=7";
+ 			< 700000	900000	0xff	0x2 0x8	330	4>,
+ 			< 800000	900000	0xff	0x3 0xc	416	6>;
+ 
+-		gpio = <&gpio 1>;
++		gpio = <&gpio 1 0>;
+ 		gpio-feature = "gpio-mode";
+ 		gpio-feature-cfg = <1>;
+ 		gpio-mode-reg = <0x430 0x7 8 1>;
+@@ -718,6 +718,7 @@ page_owner=on loop.max_part=7";
+ 
+ 	gpio: gpio@10005000 {
+ 		compatible = "mediatek,gpio", "syscon";
++		#gpio-cells = <2>;
+ 		reg = <0 0x10005000 0 0x1000>;
+ 	};
+ 
+@@ -2168,6 +2169,8 @@ defined(CONFIG_MTK_CAM_SECURITY_SUPPORT)
+ 	};
+ 
+ 	i2c0: i2c0@11007000 {
++		#address-cells = <1>;
++		#size-cells = <0>;
+ 		compatible = "mediatek,i2c";
+ 		id = <0>;
+ 		reg = <0 0x11007000 0 0x1000>,
+@@ -2188,6 +2191,8 @@ defined(CONFIG_MTK_CAM_SECURITY_SUPPORT)
+ 	};
+ 
+ 	i2c1: i2c1@11008000 {
++		#address-cells = <1>;
++		#size-cells = <0>;
+ 		compatible = "mediatek,i2c";
+ 		id = <1>;
+ 		reg = <0 0x11008000 0 0x1000>,
+@@ -2208,6 +2213,8 @@ defined(CONFIG_MTK_CAM_SECURITY_SUPPORT)
+ 	};
+ 
+ 	i2c2: i2c2@11009000 {
++		#address-cells = <1>;
++		#size-cells = <0>;
+ 		compatible = "mediatek,i2c";
+ 		id = <2>;
+ 		reg = <0 0x11009000 0 0x1000>,
+@@ -2230,6 +2237,8 @@ defined(CONFIG_MTK_CAM_SECURITY_SUPPORT)
+ 	};
+ 
+ 	i2c3: i2c3@1100f000 {
++		#address-cells = <1>;
++		#size-cells = <0>;
+ 		compatible = "mediatek,i2c";
+ 		id = <3>;
+ 		reg = <0 0x1100f000 0 0x1000>,
+@@ -2252,6 +2261,8 @@ defined(CONFIG_MTK_CAM_SECURITY_SUPPORT)
+ 	};
+ 
+ 	i2c4: i2c4@11011000 {
++		#address-cells = <1>;
++		#size-cells = <0>;
+ 		compatible = "mediatek,i2c";
+ 		id = <4>;
+ 		reg = <0 0x11011000 0 0x1000>,
+@@ -2274,6 +2285,8 @@ defined(CONFIG_MTK_CAM_SECURITY_SUPPORT)
+ 	};
+ 
+ 	i2c5: i2c5@11016000 {
++		#address-cells = <1>;
++		#size-cells = <0>;
+ 		compatible = "mediatek,i2c";
+ 		id = <5>;
+ 		reg = <0 0x11016000 0 0x1000>,
+@@ -2294,6 +2307,8 @@ defined(CONFIG_MTK_CAM_SECURITY_SUPPORT)
+ 	};
+ 
+ 	i2c6: i2c6@1100d000 {
++		#address-cells = <1>;
++		#size-cells = <0>;
+ 		compatible = "mediatek,i2c";
+ 		id = <6>;
+ 		reg = <0 0x1100d000 0 0x1000>,
+@@ -2314,6 +2329,8 @@ defined(CONFIG_MTK_CAM_SECURITY_SUPPORT)
+ 	};
+ 
+ 	i2c7: i2c7@11004000 {
++		#address-cells = <1>;
++		#size-cells = <0>;
+ 		compatible = "mediatek,i2c";
+ 		id = <7>;
+ 		reg = <0 0x11004000 0 0x1000>,
+@@ -2334,6 +2351,8 @@ defined(CONFIG_MTK_CAM_SECURITY_SUPPORT)
+ 	};
+ 
+ 	i2c8: i2c8@11005000 {
++		#address-cells = <1>;
++		#size-cells = <0>;
+ 		compatible = "mediatek,i2c";
+ 		id = <8>;
+ 		reg = <0 0x11005000 0 0x1000>,
+@@ -2524,7 +2543,7 @@ defined(CONFIG_MTK_CAM_SECURITY_SUPPORT)
+ 		clock-names = "parent-clk", "sel-clk", "spi-clk";
+ 	};
+ 
+-	spi2:spi2@11012000 {
++	spi2:spi@11012000 {
+ 		compatible = "mediatek,mt6765-spi";
+ 		mediatek,pad-select = <0>;
+ 		reg = <0 0x11012000 0 0x1000>;
+diff --git a/arch/arm64/configs/earth_defconfig b/arch/arm64/configs/earth_defconfig
+index e2e7971ae..c3ec1fc8a 100644
+--- a/arch/arm64/configs/earth_defconfig
++++ b/arch/arm64/configs/earth_defconfig
+@@ -433,9 +433,4 @@ CONFIG_EROFS_FS=y
+ # C3T code for HQ-218723 by liaodengchuan at 2022/09/06 start
+ CONFIG_MTK_SECURITY_SW_SUPPORT=y
+ # C3T code for HQ-218723 by liaodengchuan at 2022/09/06 end
+-# C3T code for HQ-218639 by huitianpu at 2022/8/21 end
+-# C3T code for HQ-219022 by jiangyue at 2022/08/22 start
+-CONFIG_MI_ERRFLAG_ESD_CHECK_ENABLE=y
+-# C3T code for HQ-219022 by jiangyue at 2022/08/22 end
+-CONFIG_EROFS_FS=y
+ 
+diff --git a/drivers/gpu/mediatek/ged/src/ged_dvfs.c b/drivers/gpu/mediatek/ged/src/ged_dvfs.c
+index 566132dfa..42203a2d1 100644
+--- a/drivers/gpu/mediatek/ged/src/ged_dvfs.c
++++ b/drivers/gpu/mediatek/ged/src/ged_dvfs.c
+@@ -1007,8 +1007,10 @@ static int ged_dvfs_fb_gpu_dvfs(int t_gpu, int t_gpu_target,
+ 		force_fallback_pre = force_fallback;
+ #ifdef GED_CONFIGURE_LOADING_BASE_DVFS_STEP
+ 		if (force_fallback == 1) {
++			int i32NewFreqID;
++
+ 			g_lb_down_count = 1;
+-			int i32NewFreqID =
++			i32NewFreqID =
+ 			(int) mt_gpufreq_get_cur_freq_index();
+ 
+ 			if (dvfs_step_mode == 0)
+diff --git a/drivers/gpu/mediatek/ged/src/ged_hal.c b/drivers/gpu/mediatek/ged/src/ged_hal.c
+index ad1e18fd6..40c0b85ef 100644
+--- a/drivers/gpu/mediatek/ged/src/ged_hal.c
++++ b/drivers/gpu/mediatek/ged/src/ged_hal.c
+@@ -122,7 +122,7 @@ static int ged_dvfs_opp_cost_seq_show(struct seq_file *psSeqFile,
+ 	int len;
+ 
+ 	if (pvData != NULL) {
+-		int i, j;
++		int i;
+ 		int cur_idx;
+ 		unsigned int ui32FqCount = 0;
+ 		unsigned int ui32TotalTrans;
+diff --git a/drivers/gpu/mediatek/ged/src/ged_kpi.c b/drivers/gpu/mediatek/ged/src/ged_kpi.c
+index 624cbcaa0..01348c38f 100644
+--- a/drivers/gpu/mediatek/ged/src/ged_kpi.c
++++ b/drivers/gpu/mediatek/ged/src/ged_kpi.c
+@@ -49,6 +49,7 @@ EXPORT_SYMBOL(ged_kpi_PushAppSelfFcFp_fbt);
+ 
+ #ifdef MTK_GED_KPI
+ 
++#undef GED_TAG
+ #define GED_TAG "[GED_KPI]"
+ #define GED_PR_DEBUG(fmt, args...)\
+ 	pr_debug(GED_TAG"%s %d : "fmt, __func__, __LINE__, ##args)
+diff --git a/drivers/input/fingerprint/chipone/fpsensor_spi_tee.c b/drivers/input/fingerprint/chipone/fpsensor_spi_tee.c
+index fa275779a..a738542db 100644
+--- a/drivers/input/fingerprint/chipone/fpsensor_spi_tee.c
++++ b/drivers/input/fingerprint/chipone/fpsensor_spi_tee.c
+@@ -788,6 +788,10 @@ static int fpsensor_probe(struct spi_device *spi)
+ static int fpsensor_probe(struct platform_device *spi)
+ #endif
+ {
++    /*this uuid must be the same as ta'name*/
++    struct TEEC_UUID vendor_ta_uuid = {0x7778c03f, 0xc30c, 0x4dd0, \
++            {0xa3, 0x19, 0xea, 0x29, 0x64, 0x3d, 0x4d, 0xc0} \
++        };
+     int status = 0;
+     fpsensor_data_t *fpsensor_dev = NULL;
+ 	fpsensor_debug(ERR_LOG, "%s, enter chipone probe.\n", __func__);
+@@ -831,11 +835,6 @@ static int fpsensor_probe(struct platform_device *spi)
+         goto release_drv_data;
+     }
+ 
+-    /*this uuid must be the same as ta'name*/
+-    struct TEEC_UUID vendor_ta_uuid = {0x7778c03f, 0xc30c, 0x4dd0, \
+-            {0xa3, 0x19, 0xea, 0x29, 0x64, 0x3d, 0x4d, 0xc0} \
+-        };
+-
+     memcpy(&uuid_fp, &vendor_ta_uuid, sizeof(struct TEEC_UUID));
+     fpsensor_debug(ERR_LOG, "%s set beanpod fingerprint uuid ok \n", __func__);
+ 
+diff --git a/drivers/input/fingerprint/fpc/fpc_tee.c b/drivers/input/fingerprint/fpc/fpc_tee.c
+index d61ae70fd..7ab52372c 100644
+--- a/drivers/input/fingerprint/fpc/fpc_tee.c
++++ b/drivers/input/fingerprint/fpc/fpc_tee.c
+@@ -111,7 +111,6 @@ struct fpc_data {
+ };
+ 
+ static DEFINE_MUTEX(spidev_set_gpio_mutex);
+-static struct regulator *ldoreg;
+ 
+ extern void mt_spi_disable_master_clk(struct spi_device *spidev);
+ extern void mt_spi_enable_master_clk(struct spi_device *spidev);
+@@ -164,8 +163,6 @@ static int set_clks(struct fpc_data *fpc, bool enable)
+ 
+ static int hw_reset(struct  fpc_data *fpc)
+ {
+-	struct device *dev = fpc->dev;
+-
+ 	select_pin_ctl(fpc, "fpsensor_fpc_rst_high");
+ 	usleep_range(FPC_RESET_HIGH1_US, FPC_RESET_HIGH1_US + 100);
+ 
+@@ -387,8 +384,9 @@ static ssize_t performance_store(struct device *dev,
+ static irqreturn_t fpc_irq_handler(int irq, void *handle)
+ {
+ 	struct fpc_data *fpc = handle;
+-	dev_dbg(fpc->dev, "%s\n", __func__);
+ 	struct device *dev = fpc->dev;
++
++	dev_dbg(fpc->dev, "%s\n", __func__);
+ 	static int current_level = 0; // We assume low level from start
+ 	current_level = !current_level;
+ 
+diff --git a/drivers/input/fingerprint/silead/silead_fp_mtk.c b/drivers/input/fingerprint/silead/silead_fp_mtk.c
+index e80665859..a87747856 100644
+--- a/drivers/input/fingerprint/silead/silead_fp_mtk.c
++++ b/drivers/input/fingerprint/silead/silead_fp_mtk.c
+@@ -407,9 +407,9 @@ static int silfp_set_spi(struct silfp_data *fp_dev, bool enable)
+     LOG_MSG_DEBUG(DBG_LOG, "[%s] done\n",__func__);
+ #else
+     int ret = -ENOENT;
++    struct mt_spi_t *ms = NULL;
+ /*C3T code for HQ-224157 by zhoumengxuan at 22.7.30 start*/
+ 	fp_dev->spi1=silfp_dev.spi1;
+-    struct mt_spi_t *ms = NULL;
+     ms = spi_master_get_devdata(fp_dev->spi1->master);
+ /*C3T code for HQ-224157 by zhoumengxuan at 22.7.30 end*/
+ 
+diff --git a/drivers/input/touchscreen/mediatek/ft8057/focaltech_test/focaltech_test.c b/drivers/input/touchscreen/mediatek/ft8057/focaltech_test/focaltech_test.c
+index ad67f5534..942d64929 100644
+--- a/drivers/input/touchscreen/mediatek/ft8057/focaltech_test/focaltech_test.c
++++ b/drivers/input/touchscreen/mediatek/ft8057/focaltech_test/focaltech_test.c
+@@ -2902,7 +2902,7 @@ static ssize_t fts_tp_selftest_write(struct file *file, const char __user *buffe
+ 
+ static ssize_t fts_tp_selftest_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+ {
+-	char tmp[4096];
++	char tmp[32];
+ 	int cnt;
+ 
+ 	FTS_TEST_FUNC_ENTER();
+@@ -2910,7 +2910,7 @@ static ssize_t fts_tp_selftest_read(struct file *file, char __user *buf, size_t
+ 	if (*pos != 0)
+ 		return 0;
+ 
+-	cnt = snprintf(tmp, PAGE_SIZE, "%d\n", my_test_result);
++	cnt = snprintf(tmp, sizeof(tmp), "%d\n", my_test_result);
+ 
+ 	FTS_TEST_INFO("%s: tmp = %s, self_test_result=%d\n", __func__, tmp, my_test_result);
+ 	if (copy_to_user(buf, tmp, strlen(tmp)))
+diff --git a/drivers/input/touchscreen/mediatek/nt36525b_spi/nt36xxx_mp_ctrlram.c b/drivers/input/touchscreen/mediatek/nt36525b_spi/nt36xxx_mp_ctrlram.c
+index 9ad46338b..abdd7be2f 100644
+--- a/drivers/input/touchscreen/mediatek/nt36525b_spi/nt36xxx_mp_ctrlram.c
++++ b/drivers/input/touchscreen/mediatek/nt36525b_spi/nt36xxx_mp_ctrlram.c
+@@ -2652,7 +2652,7 @@ static ssize_t nvt_tp_selftest_store(struct file *file, const char __user *buff,
+ 	char *buff_tmp = kzalloc(count + 1, GFP_KERNEL);
+ 
+ 	struct device_node *np = ts->client->dev.of_node;
+-	unsigned char mpcriteria[4096] = {0}; //novatek-mp-criteria-default
++	unsigned char mpcriteria[64] = {0}; //novatek-mp-criteria-default
+ 
+ 	TestResult_Short = 0;
+ 	TestResult_Open = 0;
+@@ -2742,7 +2742,7 @@ static ssize_t nvt_tp_selftest_store(struct file *file, const char __user *buff,
+ 		* Ex. nvt_pid = 500A
+ 		*	   mpcriteria = "novatek-mp-criteria-500A"
+ 		*/
+-		snprintf(mpcriteria, PAGE_SIZE, "novatek-mp-criteria-%04X", ts->nvt_pid);
++		snprintf(mpcriteria, sizeof(mpcriteria), "novatek-mp-criteria-%04X", ts->nvt_pid);
+ 
+ 		if (nvt_mp_parse_dt(np, mpcriteria)) {
+ 			//---Download Normal FW---
+diff --git a/drivers/misc/hqsysfs/hqsysfs.c b/drivers/misc/hqsysfs/hqsysfs.c
+index 833922392..5648c4e68 100644
+--- a/drivers/misc/hqsysfs/hqsysfs.c
++++ b/drivers/misc/hqsysfs/hqsysfs.c
+@@ -86,7 +86,6 @@ static struct attribute *huaqin_attrs[] = {
+ static ssize_t huaqin_show(struct kobject *kobj, struct attribute *a, char *buf)
+ {
+ 	ssize_t count = 0;
+-	int i = 0;
+ 	struct hw_info *hw = container_of(a, struct hw_info, attr);
+ 
+ 	if (NULL == hw) {
+@@ -301,6 +300,8 @@ int hq_regiser_hw_info(enum hardware_id id, char *device_name)
+ 			case HWID_AUDIO:
+ 				audio_pa = device_name;
+ 				break;
++			default:
++				break;
+ 			}
+ 
+ 			switch (hw->hw_id) {
+@@ -396,7 +397,6 @@ static const struct file_operations sdc_detect_proc_fops = {
+ 
+ static int sdc_detect_init(void)
+ {
+-	int ret = -1;
+ 	sdc_detect_status = proc_create(SDC_DETECT_STATUS, 0644, NULL, &sdc_detect_proc_fops);
+ 	if (sdc_detect_status == NULL) {
+ 		pr_err("[%s]: create_proc_entry sdc_detect_status failed\n", __func__);
+diff --git a/drivers/misc/mediatek/base/power/upower_v2/Makefile b/drivers/misc/mediatek/base/power/upower_v2/Makefile
+index 817503f66..242a9bc15 100644
+--- a/drivers/misc/mediatek/base/power/upower_v2/Makefile
++++ b/drivers/misc/mediatek/base/power/upower_v2/Makefile
+@@ -30,7 +30,7 @@ ccflags-y += \
+ 
+ ifeq ($(CONFIG_MTK_TINYSYS_SSPM_SUPPORT), y)
+ #for mt6768
+-ifeq ($(CONFIG_MACH_MT6768),y))
++ifeq ($(CONFIG_MACH_MT6768),y)
+ ccflags-y += -I$(srctree)/drivers/misc/mediatek/sspm/v1/
+ else
+ ccflags-y += -I$(srctree)/drivers/misc/mediatek/sspm/
+diff --git a/drivers/misc/mediatek/ccu/src/1.2/Makefile b/drivers/misc/mediatek/ccu/src/1.2/Makefile
+index 7aae34038..430ef5eff 100644
+--- a/drivers/misc/mediatek/ccu/src/1.2/Makefile
++++ b/drivers/misc/mediatek/ccu/src/1.2/Makefile
+@@ -25,7 +25,7 @@ ccflags-y += -I$(srctree)/drivers/i2c/busses
+ ccflags-y += -I$(srctree)/drivers/misc/mediatek/imgsensor/inc
+ 
+ ccflags-y += -I$(srctree)/drivers/iommu/
+-$(warning CCU_INC=$(srctree)/drivers/misc/mediatek/ccu/src/$(MTK_PLATFORM)/ccu_ext_interface)
++# CCU_INC=$(srctree)/drivers/misc/mediatek/ccu/src/$(MTK_PLATFORM)/ccu_ext_interface
+ 
+ #$(warning $(subdir-ccflags-y))
+ 
+diff --git a/drivers/misc/mediatek/connectivity/wlan/core/gen4m/chips/common/fw_dl.c b/drivers/misc/mediatek/connectivity/wlan/core/gen4m/chips/common/fw_dl.c
+index 0ab956a3c..a71ace948 100644
+--- a/drivers/misc/mediatek/connectivity/wlan/core/gen4m/chips/common/fw_dl.c
++++ b/drivers/misc/mediatek/connectivity/wlan/core/gen4m/chips/common/fw_dl.c
+@@ -2410,7 +2410,7 @@ uint32_t wlanDownloadPatch(IN struct ADAPTER *prAdapter)
+ 	}
+ 
+ #if (CFG_ROM_PATCH_NO_SEM_CTRL == 0)
+-#pragma message("ROM code supports SEM-CTRL for ROM patch download")
++/* ROM code supports SEM-CTRL for ROM patch download */
+ 	if (wlanPatchIsDownloaded(prAdapter)) {
+ 		kalFirmwareImageUnmapping(prAdapter->prGlueInfo, NULL,
+ 					  prFwBuffer);
+diff --git a/drivers/misc/mediatek/mboot_params/mboot_params_clear.c b/drivers/misc/mediatek/mboot_params/mboot_params_clear.c
+index b9c37f8c0..becaedac2 100644
+--- a/drivers/misc/mediatek/mboot_params/mboot_params_clear.c
++++ b/drivers/misc/mediatek/mboot_params/mboot_params_clear.c
+@@ -37,7 +37,7 @@ static int __init mboot_params_clear_init(void)
+ 	struct mem_desc_t *sram;
+ 	struct device_node *np;
+ 	struct mboot_params_buffer *buf;
+-	int len, ret = 0;
++	int ret = 0;
+ 
+ 	np = of_find_node_by_path("/chosen");
+ 	if (!np)
+diff --git a/drivers/misc/mediatek/trusted_mem/Kconfig b/drivers/misc/mediatek/trusted_mem/Kconfig
+index f254fce19..3c5c6b688 100644
+--- a/drivers/misc/mediatek/trusted_mem/Kconfig
++++ b/drivers/misc/mediatek/trusted_mem/Kconfig
+@@ -31,7 +31,8 @@ config MTK_PROT_MEM_SUPPORT
+ config MTK_SECURE_MEM_SUPPORT
+ 	tristate "MTK SVP SECURE Memory Support"
+ 	depends on TRUSTONIC_TEE_SUPPORT || MTK_TEE_GP_SUPPORT || \
+-			  MTK_GZ_KREE && MTK_SVP_ON_MTEE_SUPPORT
++			  MICROTRUST_TEE_SUPPORT || \
++			  (MTK_GZ_KREE && MTK_SVP_ON_MTEE_SUPPORT)
+ 	default y
+ 	help
+ 	  Enable the support of MediaTek SVP secure memory driver.
+diff --git a/drivers/misc/mediatek/video/mt6768/dispsys/ddp_dsi.c b/drivers/misc/mediatek/video/mt6768/dispsys/ddp_dsi.c
+index e0670f862..2cbf2333e 100644
+--- a/drivers/misc/mediatek/video/mt6768/dispsys/ddp_dsi.c
++++ b/drivers/misc/mediatek/video/mt6768/dispsys/ddp_dsi.c
+@@ -201,7 +201,6 @@ static struct LCM_UTIL_FUNCS lcm_utils_dsidual;
+ static cmdqBackupSlotHandle _h_intstat;
+ /*C3T code for HQ-218828 by sunfeiting at 2022/08/15 start*/
+ static struct LCM_mipi_read_write lcm_mipi_read_write ={0};
+-static struct LCM_UTIL_FUNCS *utils = NULL;
+ /*C3T code for HQ-218828 by sunfeiting at 2022/08/15 end*/
+ 
+ unsigned int impendance0[2] = { 0 }; /* MIPITX_DSI_IMPENDANCE0 */
+diff --git a/drivers/misc/mediatek/video/mt6768/dispsys/ddp_ovl.c b/drivers/misc/mediatek/video/mt6768/dispsys/ddp_ovl.c
+index f06a04b43..75be2ce0f 100644
+--- a/drivers/misc/mediatek/video/mt6768/dispsys/ddp_ovl.c
++++ b/drivers/misc/mediatek/video/mt6768/dispsys/ddp_ovl.c
+@@ -646,12 +646,14 @@ static int ovl_layer_config(enum DISP_MODULE_ENUM module, unsigned int layer,
+ 	} else {
+ 		unsigned int size;
+ 		int m4u_port;
++#ifdef CONFIG_MTK_TRUSTED_MEMORY_SUBSYSTEM
++		enum TRUSTED_MEM_REQ_TYPE mem_type;
++#endif
+ 
+ 		size = (dst_h - 1) * cfg->src_pitch + dst_w * Bpp;
+ 		m4u_port = module_to_m4u_port(module);
+ 
+ #ifdef CONFIG_MTK_TRUSTED_MEMORY_SUBSYSTEM
+-		enum TRUSTED_MEM_REQ_TYPE mem_type;
+ 		mem_type = -1;
+ 
+ 		if ((module == DISP_MODULE_OVL0_2L) && (cfg->hnd != NULL)) {
+diff --git a/drivers/misc/mediatek/video/mt6768/videox/primary_display.c b/drivers/misc/mediatek/video/mt6768/videox/primary_display.c
+index cdd8af100..f7be7b2a5 100644
+--- a/drivers/misc/mediatek/video/mt6768/videox/primary_display.c
++++ b/drivers/misc/mediatek/video/mt6768/videox/primary_display.c
+@@ -8713,7 +8713,7 @@ struct LCM_DRIVER *DISP_GetLcmDrv(void)
+ 	return NULL;
+ }
+ 
+-static int _screen_cap_by_cmdq(unsigned int mva, enum UNIFIED_COLOR_FMT ufmt,
++static __maybe_unused int _screen_cap_by_cmdq(unsigned int mva, enum UNIFIED_COLOR_FMT ufmt,
+ 			       enum DISP_MODULE_ENUM after_eng)
+ {
+ 	int ret = 0;
+@@ -8803,7 +8803,7 @@ static int _screen_cap_by_cmdq(unsigned int mva, enum UNIFIED_COLOR_FMT ufmt,
+ 	return 0;
+ }
+ 
+-static int _screen_cap_by_cpu(unsigned int mva, enum UNIFIED_COLOR_FMT ufmt,
++static __maybe_unused int _screen_cap_by_cpu(unsigned int mva, enum UNIFIED_COLOR_FMT ufmt,
+ 	enum DISP_MODULE_ENUM after_eng)
+ {
+ 	int ret = 0;
+@@ -8861,16 +8861,7 @@ int primary_display_capture_framebuffer_ovl(unsigned long pbuf,
+ 	enum UNIFIED_COLOR_FMT ufmt)
+ {
+ 	int ret = 0;
+-#ifdef CONFIG_MTK_M4U
+-	unsigned int w_xres = primary_display_get_width();
+-	unsigned int h_yres = primary_display_get_height();
+-	unsigned int pixel_byte = primary_display_get_bpp() / 8;
+-	int buffer_size = h_yres * w_xres * pixel_byte;
+-	enum DISP_MODULE_ENUM after_eng = DISP_MODULE_OVL0;
+-	int tmp;
+-	struct m4u_client_t *m4uClient = NULL;
+-	unsigned int mva = 0;
+-#endif
++
+ 	DISPMSG("primary capture: begin\n");
+ 
+ 	disp_sw_mutex_lock(&(pgc->capture_lock));
+diff --git a/drivers/mmc/host/mtk-sd-dbg.c b/drivers/mmc/host/mtk-sd-dbg.c
+index 22a43cf63..14fe74eff 100644
+--- a/drivers/mmc/host/mtk-sd-dbg.c
++++ b/drivers/mmc/host/mtk-sd-dbg.c
+@@ -310,8 +310,6 @@ void mmc_cmd_dump(char **buff, unsigned long *size, struct seq_file *m,
+ void msdc_dump_host_state(char **buff, unsigned long *size,
+ 	struct seq_file *m, struct msdc_host *host)
+ {
+-	void __iomem *base = host->base;
+-
+ 	SPREAD_PRINTF(buff, size, m,
+ 		"enable_msdc_debug : %d\n", enable_msdc_debug);
+ 	/* add log description*/
+@@ -378,27 +376,6 @@ int g_count;
+ /* ========== driver proc interface =========== */
+ static int msdc_debug_proc_show(struct seq_file *m, void *v)
+ {
+-	int cmd = -1;
+-	int sscanf_num;
+-	int p1, p2, p3, p4, p5, p6, p7, p8;
+-	int id, zone;
+-	int mode;
+-	int thread_num, compare_count, multi_address;
+-	void __iomem *base = NULL;
+-	ulong data_for_wr;
+-	unsigned int offset = 0;
+-	unsigned int reg_value;
+-	int spd_mode = MMC_TIMING_LEGACY;
+-	struct msdc_host *host = NULL;
+-#ifdef MSDC_DMA_ADDR_DEBUG
+-	struct dma_addr *dma_address, *p_dma_address;
+-#endif
+-	int dma_status;
+-#ifdef MTK_MMC_SDIO_DEBUG
+-	u8 *res;
+-	int vcore;
+-#endif
+-
+ 		/* default dump info for aee */
+ 		seq_puts(m, "==== msdc debug info for aee ====\n");
+ 		msdc_proc_dump(m, 0);
+diff --git a/drivers/staging/android/mtk_ion/mtk/ion_drv.c b/drivers/staging/android/mtk_ion/mtk/ion_drv.c
+index f4b497137..c8464a205 100644
+--- a/drivers/staging/android/mtk_ion/mtk/ion_drv.c
++++ b/drivers/staging/android/mtk_ion/mtk/ion_drv.c
+@@ -567,7 +567,7 @@ static long ion_sys_cache_sync(struct ion_client *client,
+ 		m4u_mva_unmap_kernel((unsigned long)param->va,
+ 				     sync_size, sync_va);
+ #else
+-		m4u_mva_unmap_kernel((unsigned int)param->va,
++		m4u_mva_unmap_kernel((unsigned int)(unsigned long)param->va,
+ 				     (unsigned int)sync_size, sync_va);
+ #endif
+ 	} else if (ion_need_unmap_flag) {
+diff --git a/drivers/tee/teei/400/tz_driver/switch_queue.c b/drivers/tee/teei/400/tz_driver/switch_queue.c
+index 21a3b7e56..8f5377407 100644
+--- a/drivers/tee/teei/400/tz_driver/switch_queue.c
++++ b/drivers/tee/teei/400/tz_driver/switch_queue.c
+@@ -151,7 +151,6 @@ static int handle_one_switch_task(struct task_entry_struct *entry)
+ static int handle_all_switch_task(void)
+ {
+ 	struct task_entry_struct *entry = NULL;
+-	struct tz_driver_state *s = get_tz_drv_state();
+ 	int retVal = 0;
+ 
+ 	while (1) {
+diff --git a/drivers/tee/teei/400/tz_driver/teei_client_main.c b/drivers/tee/teei/400/tz_driver/teei_client_main.c
+index 63370eac6..46a222491 100644
+--- a/drivers/tee/teei/400/tz_driver/teei_client_main.c
++++ b/drivers/tee/teei/400/tz_driver/teei_client_main.c
+@@ -58,7 +58,7 @@
+ #include <../teei_fp/fp_func.h>
+ #include "tz_log.h"
+ 
+-#if (CONFIG_MICROTRUST_TZ_DRIVER_MTK_BOOTPROF && CONFIG_MTPROF)
++#if IS_ENABLED(CONFIG_MICROTRUST_TZ_DRIVER_MTK_BOOTPROF) && IS_ENABLED(CONFIG_MTPROF)
+ 
+ #if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE
+ #define TEEI_BOOT_FOOTPRINT(str) bootprof_log_boot(str)
+diff --git a/drivers/tee/teei/400/tz_driver/teei_smc_call.c b/drivers/tee/teei/400/tz_driver/teei_smc_call.c
+index 7409ca995..6dc15ad3f 100644
+--- a/drivers/tee/teei/400/tz_driver/teei_smc_call.c
++++ b/drivers/tee/teei/400/tz_driver/teei_smc_call.c
+@@ -8,6 +8,7 @@
+ #include <linux/kernel.h>
+ #include <linux/completion.h>
+ #include <linux/vmalloc.h>
++#define IMSG_TAG "[tz_driver]"
+ #include <imsg_log.h>
+ #include <linux/cpu.h>
+ #include <linux/slab.h>
+@@ -19,8 +20,6 @@
+ #include "nt_smc_call.h"
+ #include "teei_client_main.h"
+ 
+-#define IMSG_TAG "[tz_driver]"
+-
+ int teei_forward_call(unsigned long long cmd, unsigned long long cmd_addr,
+ 				unsigned long long size)
+ {
+diff --git a/drivers/thermal/thermal_core.c b/drivers/thermal/thermal_core.c
+index 637eff40a..5680c7c94 100644
+--- a/drivers/thermal/thermal_core.c
++++ b/drivers/thermal/thermal_core.c
+@@ -1909,7 +1909,7 @@ static struct notifier_block thermal_pm_nb = {
+ };
+ 
+ /* C3T code for HQ-223914 by liunianliang at 2022/08/03 start */
+-static int of_parse_thermal_message(void)
++static __maybe_unused int of_parse_thermal_message(void)
+ {
+ 	struct device_node *np;
+ 
+diff --git a/drivers/thermal/thermal_sysfs.c b/drivers/thermal/thermal_sysfs.c
+index 65f23238a..8aee08b17 100644
+--- a/drivers/thermal/thermal_sysfs.c
++++ b/drivers/thermal/thermal_sysfs.c
+@@ -729,11 +729,12 @@ cur_state_store(struct device *dev, struct device_attribute *attr,
+ static ssize_t available_show(struct device *dev, struct device_attribute *attr,
+ 			      char *buf)
+ {
+-	printk("mi_thermal %s\n", __func__);
+ 	struct thermal_cooling_device *cdev = to_cooling_device(dev);
+ 	char available_state[THERMAL_AVAILABLE_STATE_LENGTH];
+ 	int ret = -1;
+ 
++	printk("mi_thermal %s\n", __func__);
++
+ 	if (cdev->ops->get_available == NULL) {
+ 		printk("mi_thermal %s， cdev->ops->get_available is NULL !\n", __func__);
+ 		return ret;
+diff --git a/drivers/usb/gadget/configfs.c b/drivers/usb/gadget/configfs.c
+index 21ad9810c..d685be73d 100644
+--- a/drivers/usb/gadget/configfs.c
++++ b/drivers/usb/gadget/configfs.c
+@@ -1516,6 +1516,7 @@ static void configfs_composite_unbind(struct usb_gadget *gadget)
+ 	spin_unlock_irqrestore(&gi->spinlock, flags);
+ }
+ 
++#ifndef CONFIG_USB_CONFIGFS_UEVENT
+ static int configfs_composite_setup(struct usb_gadget *gadget,
+ 		const struct usb_ctrlrequest *ctrl)
+ {
+@@ -1562,6 +1563,7 @@ static void configfs_composite_disconnect(struct usb_gadget *gadget)
+ 	composite_disconnect(gadget);
+ 	spin_unlock_irqrestore(&gi->spinlock, flags);
+ }
++#endif /* !CONFIG_USB_CONFIGFS_UEVENT */
+ 
+ static void configfs_composite_suspend(struct usb_gadget *gadget)
+ {
+diff --git a/net/wireless/reg.c b/net/wireless/reg.c
+index 957ae82be..2f8cc53d2 100644
+--- a/net/wireless/reg.c
++++ b/net/wireless/reg.c
+@@ -1010,7 +1010,7 @@ static int query_regdb(const char *alpha2)
+ 	return -ENODATA;
+ }
+ 
+-static void regdb_fw_cb(const struct firmware *fw, void *context)
++static __maybe_unused void regdb_fw_cb(const struct firmware *fw, void *context)
+ {
+ 	int set_error = 0;
+ 	bool restore = true;
+diff --git a/fs/susfs.c b/fs/susfs.c
+--- a/fs/susfs.c
++++ b/fs/susfs.c
+@@ -200,7 +200,7 @@
+  * susfs_restore_creds() afterwards.
+  * Returns the original credentials on success, NULL on failure.
+  */
+-static struct cred *susfs_switch_to_ksu_domain(void) {
++static __maybe_unused struct cred *susfs_switch_to_ksu_domain(void) {
+ 	struct cred *orig_cred = NULL;
+ 	struct cred *cred = NULL;
+ 
+@@ -234,7 +234,7 @@
+  * Restores the original credentials that were saved by
+  * susfs_switch_to_ksu_domain().
+  */
+-static void susfs_restore_creds(struct cred *orig_cred) {
++static __maybe_unused void susfs_restore_creds(struct cred *orig_cred) {
+ 	if (!orig_cred)
+ 		return;
+ 
+diff --git a/drivers/misc/mediatek/base/power/cpufreq_v1/src/Makefile b/drivers/misc/mediatek/base/power/cpufreq_v1/src/Makefile
+index 3a6d7c099..a799d58aa 100644
+--- a/drivers/misc/mediatek/base/power/cpufreq_v1/src/Makefile
++++ b/drivers/misc/mediatek/base/power/cpufreq_v1/src/Makefile
+@@ -86,7 +86,7 @@ endif
+ 
+ ifeq ($(CONFIG_MTK_TINYSYS_SSPM_VERSION), "v1")
+ ccflags-y += -D CONFIG_MTK_TINYSYS_SSPM_V1
+-$(warning "use CONFIG_MTK_TINYSYS_SSPM_V1")
++$(info "use CONFIG_MTK_TINYSYS_SSPM_V1")
+ endif
+ 
+ # main
+diff --git a/drivers/misc/mediatek/base/power/ppm_v3/src/Makefile b/drivers/misc/mediatek/base/power/ppm_v3/src/Makefile
+index 8e897c3d7..0266018c4 100644
+--- a/drivers/misc/mediatek/base/power/ppm_v3/src/Makefile
++++ b/drivers/misc/mediatek/base/power/ppm_v3/src/Makefile
+@@ -107,7 +107,7 @@ obj-y += mtk_ppm_ipi.o
+ 
+ # for CPI
+ ifeq ($(USE_PPM_CPI), "true")
+-$(warning USE_PPM_CPI)
++$(info USE_PPM_CPI)
+ obj-y += mtk_ppm_cpi.o
+ endif
+ 
+diff --git a/drivers/misc/mediatek/connectivity/common/Kbuild b/drivers/misc/mediatek/connectivity/common/Kbuild
+index 3b502a777..3ebc08ae6 100644
+--- a/drivers/misc/mediatek/connectivity/common/Kbuild
++++ b/drivers/misc/mediatek/connectivity/common/Kbuild
+@@ -118,10 +118,10 @@ endif
+ ###############################################################################
+ MODULE_NAME := wmt_drv
+ ifeq ($(CONFIG_WLAN_DRV_BUILD_IN),y)
+-$(warning $(MODULE_NAME) build-in boot.img)
++$(info $(MODULE_NAME) build-in boot.img)
+ obj-y += $(MODULE_NAME).o
+ else
+-$(warning $(MODULE_NAME) is kernel module)
++$(info $(MODULE_NAME) is kernel module)
+ obj-m += $(MODULE_NAME).o
+ endif
+ 
+@@ -214,7 +214,7 @@ ccflags-y += -D CFG_WMT_EVB
+ endif
+ 
+ KERNEL_VERSION_SUPPORT_CHIPID_LIST := $(patsubst %Y,%,$(patsubst %N,,$(patsubst %Ny,%Y,$(foreach chipid,$(patsubst mt%.c,%,$(notdir $(wildcard $(KO_CODE_PATH)/common_main/platform/mt[0-9][0-9][0-9][0-9].c))),$(chipid)N$(CONFIG_MTK_COMBO_CHIP_CONSYS_$(chipid))))))
+-$(warning KERNEL_VERSION_SUPPORT_CHIPID_LIST=[$(KERNEL_VERSION_SUPPORT_CHIPID_LIST)])
++$(info KERNEL_VERSION_SUPPORT_CHIPID_LIST=[$(KERNEL_VERSION_SUPPORT_CHIPID_LIST)])
+ 
+ ifeq ($(KERNEL_VERSION_SUPPORT_CHIPID_LIST),)
+ ifneq ($(CONNSYS_PLATFORM),)
+diff --git a/drivers/misc/mediatek/connectivity/gps/Makefile b/drivers/misc/mediatek/connectivity/gps/Makefile
+index 249698e27..de5d31408 100644
+--- a/drivers/misc/mediatek/connectivity/gps/Makefile
++++ b/drivers/misc/mediatek/connectivity/gps/Makefile
+@@ -12,9 +12,9 @@
+ ###############################################################################
+ ifeq ($(GPS_CHIP_ID), common)
+ 
+-$(warning GPS_CHIP_ID = common)
++$(info GPS_CHIP_ID = common)
+ else
+-$(warning GPS_CHIP_ID != common)
++$(info GPS_CHIP_ID != common)
+ # Necessary Check
+ MTK_PLATFORM := $(subst ",,$(CONFIG_MTK_PLATFORM))
+ ifeq ($(CONFIG_MTK_GPS_SUPPORT), y)
+diff --git a/drivers/misc/mediatek/connectivity/wlan/adaptor/Makefile b/drivers/misc/mediatek/connectivity/wlan/adaptor/Makefile
+index f5fe66bc7..040e51386 100644
+--- a/drivers/misc/mediatek/connectivity/wlan/adaptor/Makefile
++++ b/drivers/misc/mediatek/connectivity/wlan/adaptor/Makefile
+@@ -52,10 +52,10 @@ ccflags-y += -D MTK_WCN_WMT_STP_EXP_SYMBOL_ABSTRACT
+ ccflags-y += -D CREATE_NODE_DYNAMIC=1
+ 
+ ifeq ($(CONFIG_WLAN_DRV_BUILD_IN),y)
+-$(warning $(MODULE_NAME) build-in boot.img)
++$(info $(MODULE_NAME) build-in boot.img)
+ obj-y += $(MODULE_NAME).o
+ else
+-$(warning $(MODULE_NAME) is kernel module)
++$(info $(MODULE_NAME) is kernel module)
+ obj-m += $(MODULE_NAME).o
+ endif
+ 
+diff --git a/drivers/misc/mediatek/connectivity/wlan/core/gen4m/Makefile b/drivers/misc/mediatek/connectivity/wlan/core/gen4m/Makefile
+index 3c5d0c080..0134ac730 100644
+--- a/drivers/misc/mediatek/connectivity/wlan/core/gen4m/Makefile
++++ b/drivers/misc/mediatek/connectivity/wlan/core/gen4m/Makefile
+@@ -543,11 +543,11 @@ obj-$(CONFIG_MTK_COMBO_WIFI) += $(MODULE_NAME).o
+ endif
+ 
+ ifeq ($(CONFIG_WLAN_DRV_BUILD_IN),y)
+-$(warning $(MODULE_NAME) build-in boot.img)
++$(info $(MODULE_NAME) build-in boot.img)
+ obj-y += $(MODULE_NAME).o
+ ccflags-y += -DCONFIG_WLAN_DRV_BUILD_IN=1
+ else
+-$(warning $(MODULE_NAME) is kernel module)
++$(info $(MODULE_NAME) is kernel module)
+ obj-m += $(MODULE_NAME).o
+ ccflags-y += -DCONFIG_WLAN_DRV_BUILD_IN=0
+ endif
