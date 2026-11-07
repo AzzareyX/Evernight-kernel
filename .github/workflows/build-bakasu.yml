@@ -6,7 +6,7 @@ on:
       kernel_ref:
         description: "LineageOS kernel branch/tag"
         required: true
-        default: "lineage-23.2"
+        default: "lineage-24.0"
       bakasu_ref:
         description: "BakaSU branch/tag/commit (pinned for this patch set)"
         required: true
@@ -38,7 +38,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: LineageOS/android_kernel_xiaomi_earth
-          ref: ${{ github.event.inputs.kernel_ref || 'lineage-23.2' }}
+          ref: ${{ github.event.inputs.kernel_ref || 'lineage-24.0' }}
           path: kernel
           fetch-depth: 1
 
@@ -53,20 +53,46 @@ jobs:
       - name: Integrate BakaSU + SUSFS
         working-directory: kernel
         run: |
+          set -euo pipefail
+
+          BAKASU_REF="${{ github.event.inputs.bakasu_ref || '516d3e87fbc986ccefdde2c2765f1700612441a9' }}"
+
           # BakaSU setup: clone driver, symlink drivers/kernelsu, update
           # drivers/Makefile and drivers/Kconfig.
-          curl -fLSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/${{ github.event.inputs.bakasu_ref || '516d3e87fbc986ccefdde2c2765f1700612441a9' }}/kernel/setup.sh" \
-            | bash -s "${{ github.event.inputs.bakasu_ref || '516d3e87fbc986ccefdde2c2765f1700612441a9' }}"
+          curl -fLSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/${BAKASU_REF}/kernel/setup.sh" \
+            | bash -s "$BAKASU_REF"
 
           # SUSFS v2.3.0 core backport for Linux 4.19, plus the SUSFS
-          # inline-hook integration required by BakaSU, plus earth_defconfig.
+          # inline-hook integration required by BakaSU.
           git apply --whitespace=nowarn ../patches/bakasu-susfs-earth-4.19.patch
 
       - name: Configure kernel
         working-directory: kernel
         run: |
+          set -euo pipefail
           export PATH="/usr/lib/llvm-17/bin:$PATH"
+
           make $MAKE_ARGS earth_defconfig
+
+          # The BakaSU/SUSFS options are applied here instead of inside the
+          # source patch, so the patch does not depend on the exact tail of
+          # earth_defconfig (LineageOS 24.0 changed it).
+          ./scripts/config --file out/.config \
+            -e KSU \
+            -e KSU_SUSFS \
+            -e KSU_SUSFS_SUS_PATH \
+            -e KSU_SUSFS_SUS_MOUNT \
+            -e KSU_SUSFS_SUS_KSTAT \
+            -e KSU_SUSFS_SPOOF_UNAME \
+            -e KSU_SUSFS_ENABLE_LOG \
+            -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+            -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+            -e KSU_SUSFS_OPEN_REDIRECT \
+            -e KSU_SUSFS_SUS_MAP \
+            -e KALLSYMS \
+            -e KALLSYMS_ALL
+
+          make $MAKE_ARGS olddefconfig
 
           # Fail early if the BakaSU/SUSFS Kconfig settings were not picked up.
           grep -q '^CONFIG_KSU=y$' out/.config
@@ -74,6 +100,11 @@ jobs:
           grep -q '^CONFIG_KSU_SUSFS_SUS_PATH=y$' out/.config
           grep -q '^CONFIG_KSU_SUSFS_SUS_MOUNT=y$' out/.config
           grep -q '^CONFIG_KSU_SUSFS_SUS_KSTAT=y$' out/.config
+          grep -q '^CONFIG_KSU_SUSFS_SPOOF_UNAME=y$' out/.config
+          grep -q '^CONFIG_KSU_SUSFS_ENABLE_LOG=y$' out/.config
+          grep -q '^CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y$' out/.config
+          grep -q '^CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y$' out/.config
+          grep -q '^CONFIG_KSU_SUSFS_OPEN_REDIRECT=y$' out/.config
           grep -q '^CONFIG_KSU_SUSFS_SUS_MAP=y$' out/.config
           grep -q '^CONFIG_KALLSYMS_ALL=y$' out/.config
 
@@ -83,17 +114,23 @@ jobs:
       - name: Build kernel
         working-directory: kernel
         run: |
+          set -euo pipefail
           export PATH="/usr/lib/llvm-17/bin:$PATH"
 
           # Some LineageOS trees ship a prebuilt tools/build/cpio for the
           # builder's architecture. Use the host cpio from apt instead.
-          cp /usr/bin/cpio tools/build/cpio
-          chmod +x tools/build/cpio
+          # LineageOS 24.0 no longer ships this file, so only replace it
+          # when it exists.
+          if [ -e tools/build/cpio ]; then
+            cp /usr/bin/cpio tools/build/cpio
+            chmod +x tools/build/cpio
+          fi
 
           make -j"$(nproc)" $MAKE_ARGS Image.gz-dtb
 
       - name: Package AnyKernel3 zip
         run: |
+          set -euo pipefail
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           cp kernel/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
           cp anykernel/anykernel.sh AnyKernel3/anykernel.sh
