@@ -66,6 +66,13 @@ jobs:
           # inline-hook integration required by BakaSU.
           git apply --whitespace=nowarn ../patches/bakasu-susfs-earth-4.19.patch
 
+          # Fix build warnings from the upstream earth tree (duplicate
+          # defconfig symbols, unmet Kconfig dependencies, unused
+          # variables/functions, macro redefinitions, DTC reg_format /
+          # gpios / interrupts warnings, oversized stack frames in the
+          # touchscreen selftest paths, and MTK Makefile debug prints).
+          git apply --whitespace=nowarn ../patches/fix-build-warnings.patch
+
       - name: Configure kernel
         working-directory: kernel
         run: |
@@ -77,7 +84,14 @@ jobs:
           # The BakaSU/SUSFS options are applied here instead of inside the
           # source patch, so the patch does not depend on the exact tail of
           # earth_defconfig (LineageOS 24.0 changed it).
+          # KSU_SUSFS lives inside the "KernelSU Hooking Method" choice
+          # (default: KSU_TRACEPOINT_HOOK). Enabling it without first
+          # disabling the other choice members makes kconfig warn with
+          # "override: KSU_SUSFS changes choice state", so disable them
+          # explicitly first.
           ./scripts/config --file out/.config \
+            -d KSU_TRACEPOINT_HOOK \
+            -d KSU_MANUAL_HOOK \
             -e KSU \
             -e KSU_SUSFS \
             -e KSU_SUSFS_SUS_PATH \
